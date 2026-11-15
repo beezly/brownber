@@ -1,6 +1,6 @@
 import Phaser from './phaser';
 import { PAL } from './palette';
-import { ROOMS, START_ROOM, TOTAL_ITEMS, SIGNS, type RoomDef, type GuardianDef } from './rooms';
+import { ROOMS, START_ROOM, TOTAL_ITEMS, type RoomDef, type GuardianDef } from './rooms';
 import { charById, type CharDef, type Frame } from './characters';
 import { drawText, drawTextCentered, wrap } from './font';
 import { input } from './input';
@@ -34,10 +34,10 @@ const MINUTES_PER_FRAME = 15 / 3600; // 1 real minute = 15 game minutes
 
 type Mode = 'cosy' | 'classic';
 
-const isSolid = (ch: string) => ch === '#' || ch === 'X' || ch === 'B';
-const isOneWay = (ch: string) => '=-C<>~'.includes(ch);
+const isSolid = (ch: string) => '#XBGD'.includes(ch);
+const isOneWay = (ch: string) => '=-C<>~O'.includes(ch);
 const isSupport = (ch: string) => isSolid(ch) || isOneWay(ch) || ch === 'S';
-const isStable = (ch: string) => '#X=-'.includes(ch);
+const isStable = (ch: string) => '#X=-GD'.includes(ch);
 const isOneWayOrPile = (ch: string) => isOneWay(ch) || ch === 'S';
 
 interface Guardian {
@@ -257,12 +257,11 @@ export class GameScene extends Phaser.Scene {
         } else if (ch === 'N') {
           this.tiles[r][c] = '.';
           const spec = room.npcs[npcIdx++];
-          if (!spec) continue;
-          const isAlt = spec.id === this.hero.id;
-          const def = charById(isAlt ? spec.alt : spec.id);
+          if (!spec || spec.id === this.hero.id) continue; // you can't meet yourself
+          const def = charById(spec.id);
           const sprite = this.add.image(c * T + 4, (r + 1) * T, `${def.id}_idle`).setOrigin(0.5, 1).setDepth(3);
-          const lines = isAlt && spec.altLines ? spec.altLines : spec.lines;
-          this.npcs.push({ def, x: c * T + 4, y: (r + 1) * T, sprite, lines, pose: isAlt ? undefined : spec.pose });
+          const lines = spec.byHero?.[this.hero.id] ?? spec.lines;
+          this.npcs.push({ def, x: c * T + 4, y: (r + 1) * T, sprite, lines, pose: spec.pose });
         } else if (ch === 'C') {
           this.crumble.set(`${c},${r}`, CRUMBLE_HP);
         } else if (ch === '~') {
@@ -273,13 +272,15 @@ export class GameScene extends Phaser.Scene {
 
     for (const def of room.guardians) {
       if (def.kind === 'binks' && this.hasCompanion) continue; // Binks is with Tom and Luke
-      const key = def.kind === 'binks' ? 'binks_a' : def.kind;
-      const sprite = this.add.image(0, 0, key).setOrigin(0).setDepth(4);
+      const key =
+        def.kind === 'binks' ? 'binks_a' : def.kind === 'hoover' || def.kind === 'jar' ? def.kind : def.sprite;
+      const sprite = this.add.image(0, 0, this.textures.exists(key) ? key : 'hoover').setOrigin(0).setDepth(4);
+      const vertical = def.kind === 'jar' || def.kind === 'floater';
       const g: Guardian = {
         def,
         sprite,
-        x: def.kind === 'jar' ? def.x : def.x1,
-        y: def.kind === 'jar' ? def.y1 : def.y,
+        x: vertical ? def.x : def.x1,
+        y: vertical ? def.y1 : def.y,
         dir: 1,
         speed: def.kind === 'binks' ? 1.6 : def.speed,
         phase: 0,
@@ -348,14 +349,40 @@ export class GameScene extends Phaser.Scene {
               g.fillRect(x + 2, y, 3, 16);
               g.fillRect(x + 10, y, 1, 16);
               break;
+            case 'stone':
+              g.fillRect(x, y + 7, 16, 1);
+              g.fillRect(x, y + 15, 16, 1);
+              g.fillRect(x + ((y / 16) % 2 ? 4 : 11), y, 1, 7);
+              g.fillRect(x + ((y / 16) % 2 ? 11 : 4), y + 8, 1, 7);
+              break;
+            case 'sky': {
+              // evening sky: stars high up
+              const n = (x * 7 + y * 13) % 29;
+              if (y < 100 && n === 0) g.fillRect(x + (n % 7) + 3, y + ((x + y) % 11), 1, 1);
+              break;
+            }
+            case 'plain':
+              break;
           }
         }
+      }
+      if (th.motifKind === 'sky') {
+        // the Howgill Fells on the horizon
+        g.fillStyle(th.wallDark, 1);
+        for (let x = 0; x < RW; x++) {
+          const h = 30 + Math.sin(x / 34 + this.room.pos.x) * 10 + Math.sin(x / 13) * 3;
+          g.fillRect(x, 120 - h, 1, h + 56);
+        }
+        g.fillStyle(PAL.yellow, 1);
+        g.fillRect(212, 18, 6, 6); // the moon
+        g.fillStyle(th.bg, 1);
+        g.fillRect(214, 18, 4, 4);
       }
       for (let r = 0; r < ROWS; r++) {
         for (let c = 0; c < COLS; c++) this.drawStaticTile(g, this.tiles[r][c], c, r);
       }
       // signs
-      for (const s of SIGNS[this.room.id] ?? []) drawText(g, s.text, s.x, s.y, PAL.yellow, PAL.ink);
+      for (const s of this.room.signs ?? []) drawText(g, s.text, s.x, s.y, PAL.yellow, PAL.ink);
       g.generateTexture(key, RW, RH);
       g.destroy();
     }
@@ -436,6 +463,45 @@ export class GameScene extends Phaser.Scene {
           g.fillStyle(PAL.ink, 1);
           g.fillRect(this.tile(c - 1, r) !== '-' ? x : x + 7, y + 6, 1, 2);
         }
+        break;
+      }
+      case 'G': {
+        // grass: soil with a green top if open sky above
+        g.fillStyle(0x5a3a22, 1);
+        g.fillRect(x, y, T, T);
+        g.fillStyle(0x4a2e1a, 1);
+        g.fillRect(x + ((c * 3 + r) % 6), y + 4, 2, 1);
+        if (!'GD'.includes(this.tile(c, r - 1))) {
+          g.fillStyle(PAL.green, 1);
+          g.fillRect(x, y, T, 3);
+          g.fillStyle(PAL.lime, 1);
+          g.fillRect(x + ((c * 5) % 7), y - 1, 1, 1);
+          g.fillRect(x, y, T, 1);
+        }
+        break;
+      }
+      case 'D': {
+        // dry-stone wall / fell rock
+        g.fillStyle(PAL.grey, 1);
+        g.fillRect(x, y, T, T);
+        g.fillStyle(PAL.slate, 1);
+        g.fillRect(x, y + (c % 2 ? 3 : 5), T, 1);
+        g.fillRect(x + ((r * 3 + c) % 7), y, 1, T);
+        g.fillStyle(PAL.lgrey, 1);
+        g.fillRect(x + 1, y + 1, 2, 1);
+        break;
+      }
+      case 'O': {
+        // the fire pit: a ring of stones with logs
+        g.fillStyle(PAL.grey, 1);
+        g.fillRect(x, y + 2, T, 6);
+        g.fillStyle(PAL.lgrey, 1);
+        g.fillRect(x + 1, y + 2, 2, 2);
+        g.fillRect(x + 5, y + 3, 2, 2);
+        g.fillStyle(PAL.brown, 1);
+        g.fillRect(x + 1, y, 6, 2);
+        g.fillStyle(PAL.ink, 1);
+        g.fillRect(x, y + 7, T, 1);
         break;
       }
       case '^': {
@@ -756,45 +822,10 @@ export class GameScene extends Phaser.Scene {
     const ws = this.worldSpeed();
     for (const g of this.guardians) {
       const d = g.def;
-      // Jonny's pint: guardians that reach it stop for a drink (Binks just sniffs it)
-      if (this.pint && d.kind !== 'jar' && g.pause <= 0) {
-        const gx = g.x + 8;
-        if (Math.abs(gx - this.pint.x) < 6 && Math.abs(g.y - this.pint.y) < 24) {
-          g.pause = 150;
-          this.pint = null;
-          this.say(d.kind === 'binks' ? 'BINKS SNIFFS THE PINT...' : 'THE HOOVER STOPS FOR A PINT');
-          sfx.blip(300);
-        }
-      }
-      // Maffa's laser: Binks and the hoover chase the dot
-      if (this.laser && d.kind !== 'jar' && g.pause <= 0) {
-        const lo = d.x1;
-        const hi = d.x2 - 16;
-        const tx = Phaser.Math.Clamp(this.laser.x - 8, lo, hi);
-        const sp = (d.kind === 'binks' ? 2.4 : g.speed * 1.4) * ws;
-        if (Math.abs(tx - g.x) > sp) {
-          g.dir = tx > g.x ? 1 : -1;
-          g.x += g.dir * sp;
-          if (d.kind === 'binks') g.phase += 0.3 * ws;
-        }
-        continue;
-      }
-      if (g.pause > 0 && d.kind === 'hoover') {
-        g.pause -= ws;
-        continue;
-      }
-      if (d.kind === 'hoover') {
-        g.x += g.dir * g.speed * ws;
-        if (g.x > d.x2 - 16) {
-          g.x = d.x2 - 16;
-          g.dir = -1;
-        }
-        if (g.x < d.x1) {
-          g.x = d.x1;
-          g.dir = 1;
-        }
-      } else if (d.kind === 'jar') {
-        if (this.pint && Math.abs(g.x + 6 - this.pint.x) < 20) continue; // hovers over the pint, mesmerised
+      const w = g.sprite.width;
+      if (d.kind === 'jar' || d.kind === 'floater') {
+        // Jonny's pint mesmerises things hovering over it
+        if (this.pint && Math.abs(g.x + w / 2 - this.pint.x) < 20) continue;
         g.y += g.dir * g.speed * ws;
         if (g.y > d.y2) {
           g.y = d.y2;
@@ -804,37 +835,85 @@ export class GameScene extends Phaser.Scene {
           g.y = d.y1;
           g.dir = 1;
         }
-      } else {
+        continue;
+      }
+      const lo = d.x1;
+      const hi = d.x2 - w;
+      const ground = d.kind !== 'flyer';
+      // Jonny's pint: things on the ground that reach it stop for a drink (Binks just sniffs it)
+      if (this.pint && ground && g.pause <= 0) {
+        const groundY = d.kind === 'binks' ? d.y : d.y + g.sprite.height;
+        if (Math.abs(g.x + w / 2 - this.pint.x) < 6 && Math.abs(groundY - this.pint.y) < 24) {
+          g.pause = 150;
+          this.pint = null;
+          this.say(d.kind === 'binks' ? 'BINKS SNIFFS THE PINT...' : 'TIME FOR A PINT...');
+          sfx.blip(300);
+        }
+      }
+      // Maffa's laser: things on the ground chase the dot
+      if (this.laser && ground && g.pause <= 0) {
+        const tx = Phaser.Math.Clamp(this.laser.x - w / 2, lo, hi);
+        const sp = (d.kind === 'binks' ? 2.4 : g.speed * 1.4) * ws;
+        if (Math.abs(tx - g.x) > sp) {
+          g.dir = tx > g.x ? 1 : -1;
+          g.x += g.dir * sp;
+          if (d.kind === 'binks') g.phase += 0.3 * ws;
+        }
+        continue;
+      }
+      if (d.kind === 'binks') {
         // Binks: zooms about, hops, stops for a sniff now and then
         if (g.woof > 0) g.woof--;
         if (g.pause > 0) {
           g.pause -= ws;
-        } else {
-          g.x += g.dir * g.speed * ws;
-          g.phase += 0.25 * ws;
-          if (g.x > d.x2 - 16 || g.x < d.x1) {
-            g.x = Phaser.Math.Clamp(g.x, d.x1, d.x2 - 16);
-            g.dir *= -1;
-            g.speed = 1.2 + Math.random() * 1.4;
-          }
-          if (Math.random() < 0.004) g.pause = 40 + Math.floor(Math.random() * 50);
-          if (Math.random() < 0.01) g.speed = 1.2 + Math.random() * 1.4;
+          continue;
         }
+        g.x += g.dir * g.speed * ws;
+        g.phase += 0.25 * ws;
+        if (g.x > hi || g.x < lo) {
+          g.x = Phaser.Math.Clamp(g.x, lo, hi);
+          g.dir *= -1;
+          g.speed = 1.2 + Math.random() * 1.4;
+        }
+        if (Math.random() < 0.004) g.pause = 40 + Math.floor(Math.random() * 50);
+        if (Math.random() < 0.01) g.speed = 1.2 + Math.random() * 1.4;
+        continue;
+      }
+      if (g.pause > 0) {
+        g.pause -= ws;
+        continue;
+      }
+      if (g.woof > 0) g.woof--;
+      g.x += g.dir * g.speed * ws;
+      if (d.kind === 'flyer') g.phase += 0.07 * ws;
+      if (g.x > hi) {
+        g.x = hi;
+        g.dir = -1;
+      }
+      if (g.x < lo) {
+        g.x = lo;
+        g.dir = 1;
       }
     }
   }
 
   private guardianBox(g: Guardian): [number, number, number, number] {
-    switch (g.def.kind) {
-      case 'hoover':
-        return [g.x + 1, g.y + 1, 14, 6];
-      case 'jar':
-        return [g.x + 1, g.y + 1, 10, 10];
-      case 'binks': {
-        const hop = g.pause > 0 ? 0 : Math.abs(Math.sin(g.phase)) * 8;
-        return [g.x + 2, g.y - 11 - hop, 12, 10];
-      }
+    const d = g.def;
+    const w = g.sprite.width;
+    const h = g.sprite.height;
+    if (d.kind === 'binks') {
+      const hop = g.pause > 0 ? 0 : Math.abs(Math.sin(g.phase)) * 8;
+      return [g.x + 2, g.y - 11 - hop, 12, 10];
     }
+    if (d.kind === 'hoover') return [g.x + 1, g.y + 1, 14, 6];
+    const bob = d.kind === 'flyer' ? Math.sin(g.phase) * d.amp : 0;
+    return [g.x + 1, g.y + bob + 1, w - 2, h - 2];
+  }
+
+  /** Knock-back guardians: Binks, and anything marked harmless. */
+  private isBumper(g: Guardian) {
+    const d = g.def;
+    return d.kind === 'binks' || ((d.kind === 'walker' || d.kind === 'flyer') && !!d.harmless);
   }
 
   private checkCollisions() {
@@ -864,6 +943,7 @@ export class GameScene extends Phaser.Scene {
         const ch = this.tile(c, r);
         if (ch === '^' && overlap(c * T + 1, r * T + 4, 6, 4)) return this.die();
         if (ch === 'F' && overlap(c * T + 1, r * T + 2, 6, 6)) return this.die();
+        if (ch === 'W' && overlap(c * T, r * T + 3, T, 5)) return this.die();
       }
     }
     // steam
@@ -876,8 +956,8 @@ export class GameScene extends Phaser.Scene {
     for (const g of this.guardians) {
       const [x, y, w, h] = this.guardianBox(g);
       if (!overlap(x, y, w, h)) continue;
-      if (g.def.kind === 'binks') {
-        if (this.laser || g.pause > 0) continue; // busy chasing the dot / sniffing a pint
+      if (this.isBumper(g)) {
+        if (g.def.kind === 'binks' && (this.laser || g.pause > 0)) continue; // busy chasing the dot / sniffing a pint
         if (this.knock === 0) {
           const side = this.px + PW / 2 < x + w / 2 ? -1 : 1;
           this.knock = 22;
@@ -1316,9 +1396,11 @@ export class GameScene extends Phaser.Scene {
         const f = g.pause > 0 ? 'binks_a' : Math.floor(g.phase / 1.5) % 2 ? 'binks_a' : 'binks_b';
         g.sprite.setTexture(f).setPosition(Math.round(g.x), Math.round(g.y - 12 - hop)).setFlipX(g.dir < 0);
       } else {
-        g.sprite.setPosition(Math.round(g.x), Math.round(g.y));
-        if (g.def.kind === 'hoover') g.sprite.setFlipX(g.dir < 0);
-        if (g.def.kind === 'jar') g.sprite.setAngle(Math.sin(this.frame * 0.1) * 10);
+        const d = g.def;
+        const bob = d.kind === 'flyer' ? Math.sin(g.phase) * d.amp : 0;
+        g.sprite.setPosition(Math.round(g.x), Math.round(g.y + bob));
+        if (d.kind === 'hoover' || d.kind === 'walker' || d.kind === 'flyer') g.sprite.setFlipX(g.dir < 0);
+        if (d.kind === 'jar' || d.kind === 'floater') g.sprite.setAngle(Math.sin(this.frame * 0.1) * 10);
       }
     }
 
@@ -1368,6 +1450,15 @@ export class GameScene extends Phaser.Scene {
         const y = r * T;
         if (ch === 'S') {
           this.drawPile(g, x, y, c + r);
+        } else if (ch === 'W') {
+          const surface = this.tile(c, r - 1) !== 'W';
+          g.fillStyle(PAL.navy, 1);
+          g.fillRect(x, y + (surface ? 2 : 0), T, surface ? 6 : T);
+          g.fillStyle(PAL.blue, 1);
+          if (surface) g.fillRect(x, y + 2, T, 2);
+          g.fillStyle(0x73eff7, 1);
+          const k = Math.floor(this.frame / 8 + c) % 8;
+          if (surface) g.fillRect(x + k, y + 2, 2, 1);
         } else if (ch === 'C') {
           const hp = this.crumble.get(`${c},${r}`) ?? CRUMBLE_HP;
           const h = Math.max(1, Math.ceil((hp / CRUMBLE_HP) * 4));

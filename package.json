@@ -7,12 +7,14 @@
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
-    "deploy": "bash tools/deploy.sh"
+    "deploy": "bash tools/deploy.sh",
+    "check:rooms": "esbuild tools/check_rooms.ts --bundle --platform=node --log-level=error | node"
   },
   "dependencies": {
     "phaser": "^4.2.1"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.8"
   }

@@ -1,6 +1,7 @@
 import Phaser from './phaser';
 import { PAL } from './palette';
 import { BINKS_FRAMES, BINKS_PAL, CHARACTERS, FRAMES, buildFrame, charPalette } from './characters';
+import { EXTRA_SPRITES } from './rooms';
 
 type Pal = Record<string, number>;
 
@@ -129,6 +130,7 @@ export function bakeAll(scene: Phaser.Scene) {
   for (const [k, v] of Object.entries(ITEMS)) bake(scene, `item_${k}`, v.rows, v.pal);
   bake(scene, 'hoover', HOOVER.rows, HOOVER.pal);
   bake(scene, 'jar', JAR.rows, JAR.pal);
+  for (const [k, v] of Object.entries(EXTRA_SPRITES)) bake(scene, k, v.rows, v.pal);
   // a little speech-bubble marker shown above talkable NPCs
   bake(scene, 'bubble', ['.kkkkk.', 'kwwwwwk', 'kwkwkwk', 'kwwwwwk', '.kkwkk.', '...k...'], { k: PAL.ink, w: PAL.white });
 }

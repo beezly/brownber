@@ -216,3 +216,11 @@ class Input {
 }
 
 export const input = new Input();
+
+/** What to call a control in on-screen prompts: button names on phones, keys on a keyboard. */
+export function keyName(a: 'jump' | 'talk' | 'power' | 'map'): string {
+  const touch = document.body.classList.contains('touch');
+  return touch
+    ? { jump: 'JUMP', talk: 'TALK', power: 'POWER', map: 'MAP' }[a]
+    : { jump: 'SPACE', talk: 'E', power: 'X', map: 'M' }[a];
+}

@@ -163,3 +163,34 @@ body.ingame #btn-map { display: block; }
   cursor: pointer;
 }
 #update[hidden] { display: none; }
+
+/* ---------- keyboard legend (desktop only, in the space beside the game) ---------- */
+#keys {
+  display: none;
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 5;
+  color: #94b0c2;
+  font-size: 12px;
+  line-height: 1.9;
+}
+#keys .ttl { color: #ffcd75; font-weight: bold; letter-spacing: 2px; }
+#keys kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  margin-right: 3px;
+  border: 1px solid #566c86;
+  border-bottom-width: 3px;
+  border-radius: 4px;
+  background: #29366f;
+  color: #f4f4f4;
+  font: bold 11px ui-monospace, Menlo, monospace;
+  text-align: center;
+  line-height: 16px;
+}
+/* only where the window is wide enough to leave room beside the 4:3 game */
+@media (min-aspect-ratio: 16/10) and (min-width: 900px) {
+  body:not(.touch) #keys { display: block; }
+}

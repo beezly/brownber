@@ -3,7 +3,7 @@ import { PAL } from './palette';
 import { ROOMS, START_ROOM, TOTAL_ITEMS, type RoomDef, type GuardianDef } from './rooms';
 import { charById, type CharDef, type Frame } from './characters';
 import { drawText, drawTextCentered, wrap } from './font';
-import { input } from './input';
+import { input, keyName } from './input';
 import { sfx } from './sound';
 import { playMusic, stopMusic } from './music';
 import { ABILITIES, type AbilityDef, type AbilityId } from './abilities';
@@ -909,7 +909,7 @@ export class GameScene extends Phaser.Scene {
 
     this.clock += MINUTES_PER_FRAME;
     if (this.clock >= 24 * 60 && this.mode === 'classic') {
-      this.endGame(['MIDNIGHT!', 'THE PARTY FIZZLED OUT.', '', 'PRESS JUMP']);
+      this.endGame(['MIDNIGHT!', 'THE PARTY FIZZLED OUT.', '', `PRESS ${keyName('jump')}`]);
       return;
     }
 
@@ -1179,7 +1179,7 @@ export class GameScene extends Phaser.Scene {
     if (this.mode === 'classic') {
       this.lives--;
       if (this.lives <= 0) {
-        this.endGame(['GAME OVER', '', 'BETTER LUCK NEXT WEEKEND!', '', 'PRESS JUMP']);
+        this.endGame(['GAME OVER', '', 'BETTER LUCK NEXT WEEKEND!', '', `PRESS ${keyName('jump')}`]);
         return;
       }
     }
@@ -1531,7 +1531,7 @@ export class GameScene extends Phaser.Scene {
       g.strokeRect(8.5, 6.5, RW - 17, h - 1);
       drawTextCentered(g, f.title, RW / 2, 11, PAL.yellow, PAL.red, 2);
       f.lines.forEach((l, i) => drawTextCentered(g, l, RW / 2, 30 + i * 10, i >= f.lines.length - 2 ? PAL.lime : PAL.white));
-      if (f.t > f.textAt + 30 && Math.floor(f.t / 30) % 2) drawTextCentered(g, 'PRESS JUMP', RW / 2, h + 10, PAL.white, PAL.ink);
+      if (f.t > f.textAt + 30 && Math.floor(f.t / 30) % 2) drawTextCentered(g, `PRESS ${keyName('jump')}`, RW / 2, h + 10, PAL.white, PAL.ink);
     }
   }
 
@@ -1605,7 +1605,10 @@ export class GameScene extends Phaser.Scene {
     drawText(g, `* ITEMS ${this.collected.size}/${TOTAL_ITEMS}`, 4, RH - 18, PAL.yellow);
     drawText(g, `* FRIENDS MET ${[...this.talked].filter((t) => t !== this.hero.id).length}/${friends}`, 100, RH - 18, PAL.lime);
     drawText(g, this.hasLighter ? 'LIGHTER: FOUND!' : 'LIGHTER: MISSING', 4, RH - 9, this.hasLighter ? PAL.orange : PAL.red);
-    if (Math.floor(this.frame / 30) % 2) drawText(g, 'M/JUMP TO CLOSE', RW - 92, RH - 9, PAL.lgrey);
+    if (Math.floor(this.frame / 30) % 2) {
+      const closeTxt = `${keyName('map')} TO CLOSE`;
+      drawText(g, closeTxt, RW - 2 - closeTxt.length * 6, RH - 9, PAL.lgrey);
+    }
   }
 
   private say(text: string, t = 150) {
@@ -2272,7 +2275,7 @@ export class GameScene extends Phaser.Scene {
       if (n) {
         const bob = Math.floor(this.frame / 15) % 2;
         g.fillStyle(PAL.ink, 1);
-        drawText(g, 'TALK', n.x - 11, n.y - 36 - bob, PAL.white, PAL.ink);
+        drawTextCentered(g, keyName('talk') === 'E' ? 'E: TALK' : 'TALK', n.x, n.y - 36 - bob, PAL.white, PAL.ink);
       }
     }
   }

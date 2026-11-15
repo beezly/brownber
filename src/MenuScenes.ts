@@ -7,7 +7,7 @@ import { drawText, drawTextCentered, drawTextRows, wrap } from './font';
 import { is16, setStyle } from './settings';
 import { rebakeAll } from './sprites';
 import { lighten, mix } from './colour';
-import { input } from './input';
+import { input, keyName } from './input';
 import { sfx } from './sound';
 import { playMusic } from './music';
 import { loadSave, type SaveData } from './save';
@@ -262,7 +262,7 @@ export class TitleScene extends Phaser.Scene {
     // style switch
     g.fillStyle(PAL.ink, 0.75);
     g.fillRect(W / 2 - 74, 137, 148, 13);
-    const sLabel = is16() ? 'POWER: 16-BIT MODE  ON' : 'POWER: 16-BIT MODE  OFF';
+    const sLabel = `${keyName('power')}: 16-BIT MODE  ${is16() ? 'ON' : 'OFF'}`;
     if (is16()) drawTextRows(g, sLabel, W / 2, 140, [0xfff4c0, 0xffe080, 0xffc040, 0xf89830, 0xe86828, 0xc84020, 0x902818]);
     else drawTextCentered(g, sLabel, W / 2, 140, PAL.lgrey);
 
@@ -274,10 +274,10 @@ export class TitleScene extends Phaser.Scene {
       const name = charById(this.save.hero).name.toUpperCase();
       g.fillStyle(PAL.ink, 0.7);
       g.fillRect(W / 2 - 92, 86, 184, 22);
-      drawTextCentered(g, `JUMP: CONTINUE AS ${name}`, W / 2, 88, Math.floor(this.t / 30) % 2 ? PAL.yellow : PAL.white);
-      drawTextCentered(g, 'TALK: NEW GAME', W / 2, 98, PAL.lgrey);
+      drawTextCentered(g, `${keyName('jump')}: CONTINUE AS ${name}`, W / 2, 88, Math.floor(this.t / 30) % 2 ? PAL.yellow : PAL.white);
+      drawTextCentered(g, `${keyName('talk')}: NEW GAME`, W / 2, 98, PAL.lgrey);
       drawTextCentered(g, 'NEW GAME', W / 2, 177, PAL.lgrey);
-    } else if (Math.floor(this.t / 30) % 2) drawTextCentered(g, 'PRESS JUMP', W / 2, 177, PAL.white);
+    } else if (Math.floor(this.t / 30) % 2) drawTextCentered(g, `PRESS ${keyName('jump')}`, W / 2, 177, PAL.white);
 
     // Binks zooms across
     this.bx += 2.2;
@@ -405,8 +405,8 @@ export class SelectScene extends Phaser.Scene {
       .slice(0, 3)
       .forEach((l, i) => drawText(g, l, 66, 153 + i * 9, PAL.white));
     if (Math.floor(this.t / 30) % 2) {
-      drawText(g, 'JUMP', 20, 168, PAL.yellow);
-      drawText(g, 'TO PLAY', 11, 177, PAL.yellow);
+      drawTextCentered(g, keyName('jump'), 34, 168, PAL.yellow);
+      drawTextCentered(g, 'TO PLAY', 34, 177, PAL.yellow);
     }
   }
 }

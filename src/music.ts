@@ -19,6 +19,9 @@ interface Track {
   bar?: number; // eighth notes per bar (default 8; 6 = waltz)
   wave?: OscillatorType; // lead waveform (default square)
   lv?: number; // lead volume (default 0.05)
+  harm?: string; // optional second square voice (same grid as lead), played quieter
+  arp?: string; // optional chord-arpeggio line (same grid), short staccato squares
+  // drums also: t/T/u = high/mid/low tom
 }
 
 const TRACKS: Record<string, Track> = {
@@ -86,6 +89,7 @@ interface Track16 {
   echo?: number; // lead delay send
   bar?: number; // eighth notes per bar (default 8; 6 = waltz)
   wind?: number; // wind-gust volume, one gust every other bar
+  fillBars?: number[]; // extra bars (0-based) that end in a tom fill (the last bar always does when `fill` is set)
 }
 
 const HOUSE_LEAD = TRACKS.house.lead;
@@ -324,6 +328,8 @@ function start() {
   playingKey = keyOf(current);
   const lead = t.lead.trim().split(/\s+/);
   const bass = t.bass.trim().split(/\s+/);
+  const harm = t.harm?.trim().split(/\s+/);
+  const arp = t.arp?.trim().split(/\s+/);
   const drums = t.drums.split('');
   const len = Math.max(lead.length, bass.length);
   const eighth = 60 / t.bpm / 2;
@@ -347,7 +353,14 @@ function start() {
       if (ln && ln !== '-' && ln !== '.') note(ctx, master, t.wave ?? 'square', freq(ln), nextTime, eighth * holdLen(lead, i) * 0.9, t.lv ?? 0.05);
       const bn = bass[i];
       if (bn && bn !== '-' && bn !== '.') note(ctx, master, 'triangle', freq(bn), nextTime, eighth * holdLen(bass, i) * 0.85, 0.12);
+      const hn = harm?.[i];
+      if (hn && hn !== '-' && hn !== '.') note(ctx, master, 'square', freq(hn), nextTime, eighth * holdLen(harm!, i) * 0.9, 0.03);
+      const an = arp?.[i];
+      if (an && an !== '.') note(ctx, master, 'square', freq(an), nextTime, eighth * 0.45, 0.017);
       const d = drums[i % drums.length];
+      if (d === 't') tomChip(ctx, master, nextTime, 230);
+      if (d === 'T') tomChip(ctx, master, nextTime, 165);
+      if (d === 'u') tomChip(ctx, master, nextTime, 115);
       if (d === 'x') hat(ctx, master, nextTime, 0.02);
       if (d === 'o') thump(ctx, master, nextTime);
       if (d === 's') noiseBurst(ctx, master, nextTime, 0.08, 0.06, 'bandpass', 2200);
@@ -395,6 +408,23 @@ function hat(ctx: AudioContext, out: AudioNode, t: number, vol: number) {
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
   src.connect(f).connect(g).connect(out);
   src.start(t);
+}
+
+function tomChip(ctx: AudioContext, out: AudioNode, t: number, f: number) {
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(f, t);
+  o.frequency.exponentialRampToValueAtTime(f * 0.5, t + 0.14);
+  g.gain.setValueAtTime(0.13, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+  o.connect(g).connect(out);
+  o.start(t);
+  o.stop(t + 0.17);
+  o.onended = () => {
+    o.disconnect();
+    g.disconnect();
+  };
 }
 
 function thump(ctx: AudioContext, out: AudioNode, t: number) {
@@ -500,7 +530,7 @@ function startFM(ctx: AudioContext, t: Track16) {
       if (bn && bn !== '-' && bn !== '.') fmNote(ctx, cBass, PATCH.bass, freq(bn), tm, Math.min(sx * 2 * hold(bass, e), sx * 5) * 0.9);
     }
     const d = t.drums;
-    const fill = t.fill && bar === bars - 1 && p >= bl - 4;
+    const fill = !!t.fill && (bar === bars - 1 || !!t.fillBars?.includes(bar)) && p >= bl - 4;
     if (on(d.k, s, 'k')) fmKick(ctx, cKick, tm);
     if (fill) fmTom(ctx, cTom, tm, [230, 190, 150, 115][p - (bl - 4)], 0.85);
     else if (on(d.s, s, 's')) fmSnare(ctx, cSnare, tm);
@@ -580,11 +610,60 @@ interface Tune {
   chip: string; // chip drum pattern
   wave?: OscillatorType;
   lv?: number;
+  harm?: boolean; // chip: add a chord-tone harmony voice under the lead
+  arpFrom?: number; // chip: add a chord arpeggio line from this bar (0-based)
   fm: Omit<Track16, 'bpm' | 'lead' | 'bass' | 'chords' | 'bar'>;
+}
+/** Chip harmony: for each lead note, the highest chord tone at least a minor third below it. */
+function harmonize(lead: string, chords: string, bar = 8): string {
+  const cs = chords.trim().split(/\s+/).map(parseChord);
+  return lead
+    .trim()
+    .split(/\s+/)
+    .map((tk, i) => {
+      const m = midiOf(tk);
+      if (!m) return tk;
+      const c = cs[Math.floor(i / bar) % cs.length];
+      let best = 0;
+      for (let o = 24; o <= 108; o += 12) for (const iv of c.iv) {
+        const p = o + c.pc + iv;
+        if (p <= m - 3 && p > best) best = p;
+      }
+      return best ? midiName(best) : '.';
+    })
+    .join(' ');
+}
+/** Chip arpeggio: root-3rd-5th-octave-5th-3rd-5th-octave over each bar's chord, from `from` bar on. */
+function arpLine(chords: string, total: number, bar = 8, from = 0): string {
+  const cs = chords.trim().split(/\s+/).map(parseChord);
+  const out: string[] = [];
+  for (let i = 0; i < total; i++) {
+    const b = Math.floor(i / bar);
+    if (b < from) {
+      out.push('.');
+      continue;
+    }
+    const c = cs[b % cs.length];
+    const base = (c.pc > 6 ? 48 : 60) + c.pc;
+    const tones = [base + c.iv[0], base + c.iv[1], base + c.iv[2], base + 12];
+    out.push(midiName(tones[[0, 1, 2, 3, 2, 1, 2, 3][(i % bar) % 8]]));
+  }
+  return out.join(' ');
 }
 function def(name: string, t: Tune) {
   const bass = walk(t.roots, t.tpl);
-  TRACKS[name] = { bpm: t.bpm, bar: t.bar, lead: t.lead, bass, drums: t.chip, wave: t.wave, lv: t.lv };
+  const n8 = Math.max(t.lead.trim().split(/\s+/).length, bass.split(' ').length);
+  TRACKS[name] = {
+    bpm: t.bpm,
+    bar: t.bar,
+    lead: t.lead,
+    bass,
+    drums: t.chip,
+    wave: t.wave,
+    lv: t.lv,
+    harm: t.harm ? harmonize(t.lead, t.chords, t.bar) : undefined,
+    arp: t.arpFrom !== undefined ? arpLine(t.chords, n8, t.bar, t.arpFrom) : undefined,
+  };
   TRACKS16[name] = { bpm: t.bpm, bar: t.bar, lead: t.lead, bass, chords: t.chords, ...t.fm };
 }
 const D16 = '................';
@@ -886,6 +965,86 @@ def('dawn', {
     pad: true,
     fill: true,
     echo: 0.25,
+  },
+});
+
+// 100% LEGEND credits: anthemic, 24 bars (~48 s a loop), C major with a lift to D major
+//   A  bars 1-8   verse, C G Am F | C G F G        (sparse -> full backbeat, arps join at bar 5)
+//   B  bars 9-16  chorus, F C G Am | F C G A       (big held notes, the A chord pushes up...)
+//   C  bars 17-24 final chorus UP A TONE in D, D A Bm G | D A G G  (the last G is V of C: clean loop)
+const ANTHEM_CHIP =
+  ['o.x.s.x.', 'o.x.s.x.', 'o.x.s.x.', 'o.x.sstT'].join('') +
+  ['oxsxoxsx', 'oxsxoxsx', 'oxsxoxsx', 'oxsxtTTu'].join('') +
+  ['oxsxoxss', 'oxsxoxss', 'oxsxoxss', 'oxsxsttT'].join('') +
+  ['oxsxoxss', 'oxsxoxss', 'oxsxoxss', 'oxsxtTTu'].join('') +
+  ['oxsoosxs', 'oxsoosxs', 'oxsoosxs', 'oxsxsttT'].join('') +
+  ['oxsoosxs', 'oxsoosxs', 'oxsoosxs', 'osttTTuu'].join('');
+const bars16 = (...b: string[]) => b.join('');
+def('anthem', {
+  bpm: 120,
+  lead:
+    // A (C major)
+    'G5 - C6 - E6 - D6 C6 ' +
+    'B5 - - - G5 - A5 B5 ' +
+    'C6 - E6 - D6 - C6 A5 ' +
+    'A5 - - - F5 - G5 A5 ' +
+    'G5 - C6 - E6 - G6 E6 ' +
+    'D6 - B5 - G5 - B5 D6 ' +
+    'C6 - A5 - F5 - A5 C6 ' +
+    'D6 - - - B5 - D6 - ' +
+    // B (chorus)
+    'A5 - C6 - F6 - - - ' +
+    'E6 - - D6 C6 - G5 - ' +
+    'B5 - D6 - G6 - - F6 ' +
+    'E6 - D6 - C6 - A5 - ' +
+    'A6 - - G6 F6 - C6 - ' +
+    'G6 - - E6 C6 - E6 G6 ' +
+    'D6 - - - B5 - D6 G6 ' +
+    'E6 - C#6 - A5 - C#6 E6 ' +
+    // C (up a tone, D major)
+    'A5 - D6 - F#6 - A6 - ' +
+    'G6 - - F#6 E6 - C#6 - ' +
+    'D6 - F#6 - B6 - - A6 ' +
+    'G6 - F#6 - E6 - D6 B5 ' +
+    'A6 - - F#6 D6 - F#6 A6 ' +
+    'E6 - - - C#6 - E6 A6 ' +
+    'B6 - - A6 G6 - B5 D6 ' +
+    'G6 - - - D6 - . .',
+  roots: 'C3 G2 A2 F2 C3 G2 F2 G2 F2 C3 G2 A2 F2 C3 G2 A2 D3 A2 B2 G2 D3 A2 G2 G2',
+  tpl: '1 1 8 1 1 8 1 5',
+  chords: 'C G Am F C G F G F C G Am F C G A D A Bm G D A G G',
+  chip: ANTHEM_CHIP,
+  harm: true,
+  arpFrom: 4,
+  lv: 0.055,
+  fm: {
+    leadVoice: 'brass',
+    drums: {
+      k: bars16(
+        ...['k.......k.......', 'k.......k.......', 'k.......k.......', 'k.......k.......'],
+        ...['k...k...k...k...', 'k...k...k...k...', 'k...k...k...k...', 'k...k...k...k...'],
+        ...Array(8).fill('k...k...k..kk...'),
+        ...Array(8).fill('k..kk..kk..kk.k.'),
+      ),
+      s: bars16(
+        ...Array(8).fill('....s.......s...'),
+        ...Array(8).fill('....s.......s..s'),
+        ...Array(8).fill('....s..s....s.ss'),
+      ),
+      h: bars16(...Array(4).fill('h.h.h.h.h.h.h.h.'), ...Array(20).fill('hhhhhhhhhhhhhhhh')),
+      o: bars16(...Array(4).fill(D16), ...Array(4).fill('..............o.'), ...Array(16).fill('..o...o...o...o.')),
+    },
+    stab: bars16(...Array(4).fill(D16), ...Array(12).fill('..x...x...x...x.'), ...Array(8).fill('x..x..x.x..x..x.')),
+    arp: {
+      pat: bars16(...Array(4).fill('.x...x...x...x..'), ...Array(4).fill('x.x.x.x.x.x.x.x.'), ...Array(8).fill('x.x.x.x.x.x.x.x.'), ...Array(8).fill('x.x.x.x.x.x.x.xx')),
+      voice: 'bell',
+      oct: 5,
+      vel: 0.55,
+    },
+    pad: true,
+    fill: true,
+    fillBars: [3, 7, 11, 15, 19],
+    echo: 0.22,
   },
 });
 

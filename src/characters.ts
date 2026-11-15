@@ -53,7 +53,13 @@ export const CHARACTERS: CharDef[] = [
   { id: 'becca', name: 'Becca', partner: 'jonny', hair: 'bob', hairColor: 0x5a3a2c, skin: SKIN_LIGHT, beard: 'none', outfit: 'stripes', top: 0x1f5a3a, accent: 0xeeeadc, legs: PAL.navy, portrait: 'becca', ability: 'quiz', blurb: 'Secretly a quiz genius' },
 ];
 
-export const charById = (id: string) => CHARACTERS.find((c) => c.id === id)!;
+/** Binks as a playable hero (unlocked by a 100% legend run). He isn't in CHARACTERS: he's a dog. */
+export const BINKS_HERO: CharDef = {
+  id: 'binks', name: 'Binks', hair: 'short', hairColor: 0xc46a2f, skin: 0xc46a2f, beard: 'none', outfit: 'tee',
+  top: 0xc46a2f, legs: 0xc46a2f, ability: 'sniff', blurb: 'Bark! Herd them to the fire pit',
+};
+
+export const charById = (id: string) => (id === 'binks' ? BINKS_HERO : CHARACTERS.find((c) => c.id === id)!);
 
 // ---------------------------------------------------------------------------
 // Pixel templates. Legend:

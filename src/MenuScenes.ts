@@ -1,6 +1,6 @@
 import Phaser from './phaser';
 import { PAL } from './palette';
-import { CHARACTERS, charById } from './characters';
+import { CHARACTERS, BINKS_HERO, charById, type CharDef } from './characters';
 import { ABILITIES } from './abilities';
 import { bakeAll } from './sprites';
 import { drawText, drawTextCentered, drawTextRows, wrap } from './font';
@@ -307,16 +307,19 @@ export class SelectScene extends Phaser.Scene {
   private portrait!: Phaser.GameObjects.Image;
   private t = 0;
   private legends: Record<string, string[]> = {};
+  private roster: CharDef[] = CHARACTERS;
 
   constructor() {
     super('select');
   }
 
   init(data: { mode: Mode }) {
+    // Binks joins the roster once anyone has earned a legend star
+    this.roster = Object.keys(getLegends()).length ? [...CHARACTERS, BINKS_HERO] : CHARACTERS;
     this.mode = data.mode ?? 'cosy';
     try {
       const last = localStorage.getItem('bb-hero');
-      const i = CHARACTERS.findIndex((c) => c.id === last);
+      const i = this.roster.findIndex((c) => c.id === last);
       if (i >= 0) this.sel = i;
     } catch {
       /* ignore */
@@ -326,7 +329,7 @@ export class SelectScene extends Phaser.Scene {
   private cell(i: number) {
     const row = i < 7 ? 0 : 1;
     const col = row === 0 ? i : i - 7;
-    const n = row === 0 ? 7 : 6;
+    const n = row === 0 ? 7 : this.roster.length - 7;
     const spacing = 34;
     const x0 = W / 2 - ((n - 1) * spacing) / 2;
     return { x: Math.round(x0 + col * spacing), y: 52 + row * 36 };
@@ -335,7 +338,7 @@ export class SelectScene extends Phaser.Scene {
   create() {
     this.cameras.main.setBackgroundColor(PAL.ink);
     this.g = this.add.graphics();
-    this.sprites = CHARACTERS.map((c, i) => {
+    this.sprites = this.roster.map((c, i) => {
       const { x, y } = this.cell(i);
       const s = this.add.image(x, y, `${c.id}_idle`).setOrigin(0.5, 1);
       s.setInteractive(new Phaser.Geom.Rectangle(-4, -4, 24, 32), Phaser.Geom.Rectangle.Contains);
@@ -354,7 +357,7 @@ export class SelectScene extends Phaser.Scene {
   }
 
   private start() {
-    const c = CHARACTERS[this.sel];
+    const c = this.roster[this.sel];
     try {
       localStorage.setItem('bb-hero', c.id);
     } catch {
@@ -366,7 +369,7 @@ export class SelectScene extends Phaser.Scene {
 
   update() {
     this.t++;
-    const n = CHARACTERS.length;
+    const n = this.roster.length;
     if (input.takeLeft()) {
       this.sel = (this.sel + n - 1) % n;
       sfx.select();
@@ -377,13 +380,13 @@ export class SelectScene extends Phaser.Scene {
     }
     if (input.takeJump() || input.takeTalk()) return this.start();
 
-    const c = CHARACTERS[this.sel];
+    const c = this.roster[this.sel];
     const g = this.g;
     g.clear();
     drawTextCentered(g, 'WHO ARE YOU?', W / 2, 8, PAL.yellow, PAL.red, 2);
 
     // highlight + animate the selected friend
-    CHARACTERS.forEach((ch, i) => {
+    this.roster.forEach((ch, i) => {
       const s = this.sprites[i];
       const { x, y } = this.cell(i);
       if (i === this.sel) {

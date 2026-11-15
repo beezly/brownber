@@ -1048,5 +1048,73 @@ def('anthem', {
   },
 });
 
+// PLAY AS BINKS: scampering, bouncy, cheeky staccato. A major, 160 bpm, 16 bars.
+//   A  bars 1-8   A D A E | A D E A        (hops and a low "woof" tom at the end of every 2nd bar)
+//   B  bars 9-16  F#m D E A | F#m D E E    (higher, arps join; last bar turns back round to A)
+def('binks', {
+  bpm: 160,
+  lead:
+    'A5 . A5 C#6 . A5 E5 . ' +
+    'D6 . D6 F#6 . D6 A5 . ' +
+    'C#6 E6 C#6 A5 . E5 A5 . ' +
+    'B5 . G#5 B5 E6 . . . ' +
+    'A5 . A5 C#6 . A5 E5 . ' +
+    'D6 . F#6 . A6 . F#6 D6 ' +
+    'E6 . D6 C#6 B5 . G#5 B5 ' +
+    'A5 C#6 E6 C#6 A5 - . . ' +
+    'F#5 A5 C#6 A5 F#6 . C#6 . ' +
+    'D6 F#6 A6 F#6 D6 . A5 . ' +
+    'G#5 B5 E6 B5 G#6 . E6 . ' +
+    'A5 C#6 E6 A6 . E6 C#6 . ' +
+    'F#6 . C#6 A5 C#6 . F#6 . ' +
+    'F#6 . D6 A5 D6 . F#6 A6 ' +
+    'G#6 . E6 . B5 . G#5 B5 ' +
+    'E6 . B5 G#5 E5 G#5 B5 .',
+  roots: 'A2 D3 A2 E3 A2 D3 E3 A2 F#2 D3 E3 A2 F#2 D3 E3 E3',
+  tpl: '1 8 1 8 1 8 5 8',
+  chords: 'A D A E A D E A F#m D E A F#m D E E',
+  chip: 'o.x.s.x.o.x.s.xu',
+  arpFrom: 8,
+  fm: {
+    leadVoice: 'lead',
+    drums: { k: 'k.....k.k...k...', s: '....s.......s...', h: 'h.h.h.h.h.h.h.hh', o: '..............o.' },
+    stab: '..x...x...x...x.',
+    arp: { pat: '.x.x.x.x.x.x.x.x', voice: 'pluck', oct: 5, vel: 0.3 },
+    pad: true,
+    fill: true,
+    fillBars: [7],
+    swing: 0.2,
+    echo: 0.14,
+  },
+});
+
+// PLAY AS BINKS ending by the fire pit: warm, proud, triumphant. C major, 112 bpm, 8 bars.
+def('goodboy', {
+  bpm: 112,
+  lead:
+    'E5 - G5 - C6 - - - ' +
+    'A5 - C6 - A5 - F5 - ' +
+    'G5 - E5 - G5 - C6 E6 ' +
+    'D6 - - - B5 - G5 - ' +
+    'A5 - C6 - E6 - - C6 ' +
+    'A5 - C6 - F6 - E6 D6 ' +
+    'D6 - B5 - D6 - G6 - ' +
+    'E6 - C6 - G5 - C6 -',
+  roots: 'C3 F2 C3 G2 A2 F2 G2 C3',
+  tpl: '1 . 5 . 8 . 5 .',
+  chords: 'C F C G Am F G C',
+  chip: 'o...x.x.',
+  harm: true,
+  lv: 0.055,
+  fm: {
+    leadVoice: 'brass',
+    drums: { k: 'k.......k.k.....', s: '....s.......s...', h: 'h.h.h.h.h.h.h.h.' },
+    arp: { pat: 'x.x.x.x.x.x.x.x.', voice: 'bell', oct: 5, vel: 0.5 },
+    pad: true,
+    fill: true,
+    echo: 0.26,
+  },
+});
+
 /** Exposed for tests/tools: the registered tune tables. */
 export const tuneData = { TRACKS, TRACKS16 };

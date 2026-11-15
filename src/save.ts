@@ -3,7 +3,7 @@
 export interface SaveData {
   v: 1;
   hero: string;
-  mode: 'cosy' | 'classic' | 'zombie';
+  mode: 'cosy' | 'classic' | 'zombie' | 'binks';
   room: string;
   x: number;
   y: number;
@@ -20,6 +20,7 @@ export interface SaveData {
   torch?: boolean;
   bites?: number;
   art?: string[]; // Art Trail pieces found
+  herd?: Record<string, { room: string; x: number; y: number; state: string }>; // Binks mode
 }
 
 const KEY = 'bb-save';

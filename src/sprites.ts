@@ -2,6 +2,7 @@ import Phaser from './phaser';
 import { PAL } from './palette';
 import { BINKS_FRAMES, BINKS_PAL, CHARACTERS, FRAMES, buildFrame, charPalette } from './characters';
 import { EXTRA_SPRITES } from './rooms';
+import { BINKS_PLAYER } from './binks-art';
 import { is16 } from './settings';
 import { zombieFrame, CURE_ITEM_SPRITES, WANT_BUBBLE } from './zombie-art';
 import { darken, lighten } from './colour';
@@ -180,6 +181,8 @@ export function bakeAll(scene: Phaser.Scene) {
     for (const f of FRAMES) bake(scene, `${def.id}_${f}`, buildFrame(def, f), pal);
   }
   bake(scene, 'binks_a', BINKS_FRAMES.a, BINKS_PAL);
+  // playable Binks
+  for (const [k, v] of Object.entries(BINKS_PLAYER)) bake(scene, `binks_${k}`, v.rows, v.pal);
   bake(scene, 'binks_b', BINKS_FRAMES.b, BINKS_PAL);
   for (const [k, v] of Object.entries(ITEMS)) bake(scene, `item_${k}`, v.rows, v.pal);
   bake(scene, 'hoover', HOOVER.rows, HOOVER.pal);

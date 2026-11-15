@@ -14,7 +14,8 @@ export type AbilityId =
   | 'chord' // Leo
   | 'glide' // Sophie
   | 'pint' // Jonny
-  | 'quiz'; // Becca
+  | 'quiz' // Becca
+  | 'sniff'; // Binks
 
 export interface AbilityDef {
   name: string;
@@ -37,5 +38,6 @@ export const ABILITIES: Record<AbilityId, AbilityDef> = {
   chord: { name: 'Power Chord', desc: 'Strum in mid-air for a double jump.', active: false, duration: 0, cooldown: 0 },
   glide: { name: 'Cockatiel Glide', desc: 'Hold jump while falling to glide.', active: false, duration: 0, cooldown: 0 },
   pint: { name: 'Pint?', desc: 'Puts down a pint. Guardians stop to have it.', active: true, duration: 420, cooldown: 600 },
+  sniff: { name: 'Super Sniffer', desc: 'Nose to the ground: scent trails lead to treats and lost humans.', active: true, duration: 260, cooldown: 420 },
   quiz: { name: 'Quiz Whizz', desc: 'Knows exactly where the nearest item is.', active: true, duration: 200, cooldown: 360 },
 };

@@ -21,6 +21,24 @@ const zsfx = (name: string, ...args: number[]) => {
   if (f) f(...args);
 };
 
+/** A friend in Binks mode: they wander the Hall until Binks barks them towards the fire pit. */
+interface Herd {
+  def: CharDef;
+  room: string;
+  x: number; // centre
+  y: number; // feet
+  vy: number;
+  dir: number;
+  state: 'wander' | 'shoo' | 'sleep' | 'settled';
+  t: number;
+  say: string;
+  sayT: number;
+  slot: number;
+  sprite: Phaser.GameObjects.Image | null;
+}
+
+const REACTIONS = ['BINKS!', 'OK, OK!', 'GOOD BOY!', 'WHAT IS IT?', 'ALRIGHT!', 'COMING!', 'SHOO?', 'WHERE TO?'];
+
 interface Zombie {
   def: CharDef;
   x: number; // left of hitbox
@@ -55,12 +73,10 @@ const COYOTE = 5; // frames you can still jump after walking off a ledge
 const BUFFER = 7; // frames a jump press is remembered before landing
 const CONVEYOR = 0.6;
 const CRUMBLE_HP = 24;
-const PW = 8;
-const PH = 22;
 const STEP = 1000 / 60;
 const MINUTES_PER_FRAME = 15 / 3600; // 1 real minute = 15 game minutes
 
-type Mode = 'cosy' | 'classic' | 'zombie';
+type Mode = 'cosy' | 'classic' | 'zombie' | 'binks';
 
 const isSolid = (ch: string) => '#XBGD'.includes(ch);
 const isOneWay = (ch: string) => '=-C<>~O'.includes(ch);
@@ -123,6 +139,10 @@ interface Item {
 }
 
 export class GameScene extends Phaser.Scene {
+  // player hitbox (Binks is smaller and lower than the humans)
+  private pw = 8;
+  private ph = 22;
+
   private hero!: CharDef;
   private mode: Mode = 'cosy';
 
@@ -162,6 +182,12 @@ export class GameScene extends Phaser.Scene {
   private tidyCd = 0;
   private beatT = 0;
   private roomT = 0;
+  // Binks mode
+  private herd: Herd[] = [];
+  private treats = 0;
+  private zoomies = 0;
+  private barkT = 0;
+  private barkCd = 0;
   private legendDawn = false; // frame you entered the room (zombies give you a moment)
   private dark!: Phaser.GameObjects.Graphics;
   // the Art Trail
@@ -234,6 +260,11 @@ export class GameScene extends Phaser.Scene {
     if (!data.cont) clearSave();
     this.hero = charById(this.pending?.hero ?? data.hero ?? 'beez');
     this.mode = this.pending?.mode ?? data.mode ?? 'cosy';
+    if (this.hero.id === 'binks') this.mode = 'binks';
+    this.pw = this.mode === 'binks' ? 12 : 8;
+    this.ph = this.mode === 'binks' ? 11 : 22;
+    this.herd = [];
+    this.treats = this.zoomies = this.barkT = this.barkCd = 0;
     this.talked = new Set();
     this.visited = new Set();
     this.zombies = [];
@@ -266,6 +297,10 @@ export class GameScene extends Phaser.Scene {
     this.laser = this.pint = this.hint = null;
     this.pal = null;
     this.parts = [];
+  }
+
+  private get bm() {
+    return this.mode === 'binks';
   }
 
   private get zm() {
@@ -307,9 +342,10 @@ export class GameScene extends Phaser.Scene {
       const c = row.indexOf('P');
       if (c >= 0) {
         sx = c * T;
-        sy = (r + 1) * T - PH;
+        sy = (r + 1) * T - this.ph;
       }
     });
+    if (this.bm) this.initHerd(this.pending?.herd);
     const sv = this.pending;
     if (sv && ROOMS[sv.room]) {
       // carry on from the save
@@ -352,6 +388,7 @@ export class GameScene extends Phaser.Scene {
       y: this.checkpoint.y,
       collected: [...this.collected],
       cured: [...this.cured],
+      herd: this.bm ? Object.fromEntries(this.herd.map((m) => [m.def.id, { room: m.room, x: m.x, y: m.y, state: m.state }])) : undefined,
       art: [...this.artFound],
       held: [...this.held],
       torch: this.hasTorch,
@@ -371,7 +408,7 @@ export class GameScene extends Phaser.Scene {
     this.room = room;
     this.roomT = this.frame;
     this.visited.add(id);
-    playMusic(this.zm ? (room.theme.motifKind === 'sky' ? 'zombie_outside' : 'zombie_house') : room.music ?? 'house');
+    playMusic(this.bm ? 'binks' : this.zm ? (room.theme.motifKind === 'sky' ? 'zombie_outside' : 'zombie_house') : room.music ?? 'house');
     this.tiles = room.map.map((row) => row.padEnd(COLS, '.').slice(0, COLS).split(''));
     this.crumble.clear();
     this.vents = [];
@@ -389,6 +426,7 @@ export class GameScene extends Phaser.Scene {
     this.guardians = [];
     this.npcs = [];
     this.placeArt(id);
+    if (this.bm) this.spawnHerdSprites(id);
 
     let itemIdx = 0;
     let npcIdx = 0;
@@ -401,14 +439,14 @@ export class GameScene extends Phaser.Scene {
           if (this.collected.has(`${id}:${idx}`)) continue;
           const key =
             (this.zm ? ZOMBIE_ITEM_OVERRIDES[id]?.[idx] : undefined) ?? room.items[idx % room.items.length] ?? 'cake';
-          const sprite = this.add.image(c * T, r * T, `item_${key}`).setOrigin(0).setDepth(2);
+          const sprite = this.add.image(c * T, r * T, `item_${this.bm ? 'sausage' : key}`).setOrigin(0).setDepth(2);
           this.items.push({ idx, key, x: c * T, y: r * T, sprite });
         } else if (ch === 'P') {
           this.tiles[r][c] = '.';
         } else if (ch === 'N') {
           this.tiles[r][c] = '.';
           const spec = room.npcs[npcIdx++];
-          if (!spec || spec.id === this.hero.id) continue; // you can't meet yourself
+          if (!spec || spec.id === this.hero.id || this.bm) continue; // you can't meet yourself; in Binks mode friends roam
           const def = charById(spec.id);
           if (this.zm && !this.cured.has(def.id)) {
             this.spawnZombie(def, c * T, (r + 1) * T);
@@ -427,7 +465,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     for (const def of room.guardians) {
-      if (def.kind === 'binks' && this.hasCompanion) continue; // Binks is with Tom and Luke
+      if (def.kind === 'binks' && (this.hasCompanion || this.bm)) continue; // Binks is with Tom and Luke (or is you)
       const key =
         def.kind === 'binks' ? 'binks_a' : def.kind === 'hoover' || def.kind === 'jar' ? def.kind : def.sprite;
       const sprite = this.add.image(0, 0, this.textures.exists(key) ? key : 'hoover').setOrigin(0).setDepth(4);
@@ -994,6 +1032,11 @@ export class GameScene extends Phaser.Scene {
       this.zombieDawn();
       return;
     }
+    if (this.bm && this.clock >= 24 * 60) {
+      const n = this.herd.filter((m) => m.state === 'settled').length;
+      this.endGame(['MIDNIGHT!', '', `BINKS HERDED ${n}/${this.herd.length} HUMANS`, n ? 'TO THE FIRE PIT.' : 'TO... ABSOLUTELY NOWHERE.', '', `PRESS ${keyName('jump')}`], 'won');
+      return;
+    }
     if (this.clock >= 24 * 60 && this.mode === 'classic') {
       this.endGame(['MIDNIGHT!', 'THE PARTY FIZZLED OUT.', '', `PRESS ${keyName('jump')}`]);
       return;
@@ -1003,6 +1046,7 @@ export class GameScene extends Phaser.Scene {
     this.stepAbilityTimers();
     this.stepGuardians();
     this.stepZombies();
+    this.stepHerd();
     this.stepParticles();
     if (this.artPopup && --this.artPopup.t <= 0) {
       this.artPopup.img.destroy();
@@ -1025,11 +1069,24 @@ export class GameScene extends Phaser.Scene {
 
   // ------------------------------------------------------------------ player
   private stepPlayer() {
-    const dir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    let dir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    if (this.bm && this.zoomies > 0) {
+      // the zoomies: he just keeps running, bouncing off walls
+      this.zoomies--;
+      if (dir === 0) dir = this.facing;
+      if (this.zoomies === 0) this.say('PHEW... ZOOMIES OVER', 80);
+    }
     if (input.takeJump()) this.buffer = BUFFER;
     else if (this.buffer > 0) this.buffer--;
 
     // talk to a nearby friend
+    if (this.bm && input.takeTalk()) {
+      if (this.nearFirePit()) {
+        this.binksFinale();
+        return;
+      }
+      this.bark();
+    }
     if (input.takeTalk()) {
       const n = this.nearNpc();
       if (n) {
@@ -1065,10 +1122,11 @@ export class GameScene extends Phaser.Scene {
       }
     }
     let walk = this.abId === 'panic' && this.abT > 0 ? WALK * 1.9 : WALK;
+    if (this.bm) walk = this.zoomies > 0 ? 3.0 : 2.0;
     if (this.bitten > 0) {
       walk *= 0.6;
       this.bitten--;
-      if (this.nearStaticLight(this.px + PW / 2, this.py + 12)) this.bitten = Math.max(0, this.bitten - 12);
+      if (this.nearStaticLight(this.px + this.pw / 2, this.py + 12)) this.bitten = Math.max(0, this.bitten - 12);
       if (this.bitten === 0) this.say('PHEW! HUMAN AGAIN', 100);
     }
 
@@ -1093,7 +1151,8 @@ export class GameScene extends Phaser.Scene {
 
     // jump
     if (this.buffer > 0 && (this.grounded || this.coyote > 0) && this.knock === 0) {
-      this.vy = JUMP_V;
+      this.vy = this.bm ? -3.5 : JUMP_V;
+      if (this.bm && dir !== 0) this.vx = dir * (this.zoomies > 0 ? 3.4 : 2.7); // a long, low pounce
       this.grounded = false;
       this.coyote = 0;
       this.buffer = 0;
@@ -1110,9 +1169,9 @@ export class GameScene extends Phaser.Scene {
       this.doubleUsed = true;
       this.buffer = 0;
       sfx.chord();
-      this.burst(this.px + PW / 2, this.py + PH, PAL.yellow, 'note', 4);
+      this.burst(this.px + this.pw / 2, this.py + this.ph, PAL.yellow, 'note', 4);
       for (const z of this.zombies) {
-        if (z.state !== 'hidden' && Math.hypot(z.x + 4 - this.px - PW / 2, z.y - this.py - PH) < 44) {
+        if (z.state !== 'hidden' && Math.hypot(z.x + 4 - this.px - this.pw / 2, z.y - this.py - this.ph) < 44) {
           z.state = 'still';
           z.why = 'stun';
           z.t = 120;
@@ -1162,12 +1221,12 @@ export class GameScene extends Phaser.Scene {
   private moveX(wasGrounded: boolean) {
     this.px += this.vx;
     const r0 = Math.floor(this.py / T);
-    const r1 = Math.floor((this.py + PH - 1) / T);
+    const r1 = Math.floor((this.py + this.ph - 1) / T);
     if (this.vx > 0) {
-      const c = Math.floor((this.px + PW - 1) / T);
+      const c = Math.floor((this.px + this.pw - 1) / T);
       for (let r = r0; r <= r1; r++)
         if (isSolid(this.tile(c, r)) && c < COLS) {
-          this.px = c * T - PW;
+          this.px = c * T - this.pw;
           break;
         }
     } else if (this.vx < 0) {
@@ -1180,10 +1239,10 @@ export class GameScene extends Phaser.Scene {
     }
     // walk up one-tile steps (stairs) automatically
     if (wasGrounded && this.vx !== 0) {
-      const c = this.vx > 0 ? Math.floor((this.px + PW - 1) / T) : Math.floor(this.px / T);
-      const rf = Math.floor((this.py + PH - 1) / T);
+      const c = this.vx > 0 ? Math.floor((this.px + this.pw - 1) / T) : Math.floor(this.px / T);
+      const rf = Math.floor((this.py + this.ph - 1) / T);
       if (isOneWayOrPile(this.tile(c, rf))) {
-        const newY = rf * T - PH;
+        const newY = rf * T - this.ph;
         const headRow = Math.floor(newY / T);
         if (!isSolid(this.tile(c, headRow))) this.py = newY;
       }
@@ -1191,17 +1250,17 @@ export class GameScene extends Phaser.Scene {
   }
 
   private moveY() {
-    const prevBot = this.py + PH;
+    const prevBot = this.py + this.ph;
     this.py += this.vy;
     const c0 = Math.floor(this.px / T);
-    const c1 = Math.floor((this.px + PW - 1) / T);
+    const c1 = Math.floor((this.px + this.pw - 1) / T);
     if (this.vy > 0) {
-      const newBot = this.py + PH;
+      const newBot = this.py + this.ph;
       for (let r = Math.ceil(prevBot / T - 0.0001); r * T < newBot; r++) {
         let hit = false;
         for (let c = c0; c <= c1; c++) if (isSupport(this.tile(c, r))) hit = true;
         if (hit) {
-          this.py = r * T - PH;
+          this.py = r * T - this.ph;
           this.vy = 0;
           break;
         }
@@ -1220,13 +1279,13 @@ export class GameScene extends Phaser.Scene {
 
   private checkGrounded() {
     if (this.vy < 0) return false;
-    const bot = this.py + PH;
+    const bot = this.py + this.ph;
     const r = Math.round(bot / T);
     if (Math.abs(bot - r * T) > 0.01) return false;
     const c0 = Math.floor(this.px / T);
-    const c1 = Math.floor((this.px + PW - 1) / T);
+    const c1 = Math.floor((this.px + this.pw - 1) / T);
     for (let c = c0; c <= c1; c++) if (isSupport(this.tile(c, r))) {
-      this.py = r * T - PH;
+      this.py = r * T - this.ph;
       return true;
     }
     return false;
@@ -1234,11 +1293,11 @@ export class GameScene extends Phaser.Scene {
 
   private supportTiles() {
     const out: { c: number; r: number; ch: string }[] = [];
-    const bot = this.py + PH;
+    const bot = this.py + this.ph;
     const r = Math.round(bot / T);
     if (Math.abs(bot - r * T) > 0.01) return out;
     const c0 = Math.floor(this.px / T);
-    const c1 = Math.floor((this.px + PW - 1) / T);
+    const c1 = Math.floor((this.px + this.pw - 1) / T);
     for (let c = c0; c <= c1; c++) {
       const ch = this.tile(c, r);
       if (isSupport(ch)) out.push({ c, r, ch });
@@ -1251,9 +1310,9 @@ export class GameScene extends Phaser.Scene {
     if (this.knock > 0) return;
     // not right next to a hazard or a guardian
     const c0 = Math.floor(this.px / T) - 2;
-    const c1 = Math.floor((this.px + PW) / T) + 2;
+    const c1 = Math.floor((this.px + this.pw) / T) + 2;
     const r0 = Math.floor(this.py / T) - 1;
-    const r1 = Math.floor((this.py + PH) / T) + 1;
+    const r1 = Math.floor((this.py + this.ph) / T) + 1;
     for (let r = r0; r <= r1; r++)
       for (let c = c0; c <= c1; c++) if ('^F~C'.includes(this.tile(c, r))) return;
     for (const g of this.guardians) {
@@ -1276,7 +1335,7 @@ export class GameScene extends Phaser.Scene {
       this.grounded = false;
       this.say('TACO POWER! SAVED!');
       sfx.collect();
-      this.burst(this.px + PW / 2, this.py + 8, PAL.orange, 'dot', 10);
+      this.burst(this.px + this.pw / 2, this.py + 8, PAL.orange, 'dot', 10);
       return;
     }
     this.dying = 45;
@@ -1372,6 +1431,11 @@ export class GameScene extends Phaser.Scene {
         g.pause -= ws;
         continue;
       }
+      if (this.bm && d.kind === 'hoover' && Math.abs(g.y + 8 - this.py - this.ph) < 20) {
+        g.dir = this.px + this.pw / 2 > g.x + 8 ? 1 : -1; // the hoover has it in for Binks
+        g.x = Phaser.Math.Clamp(g.x + g.dir * g.speed * 1.3 * ws, lo, hi);
+        continue;
+      }
       if (g.woof > 0) g.woof--;
       g.x += g.dir * g.speed * ws;
       if (d.kind === 'flyer') g.phase += 0.07 * ws;
@@ -1408,8 +1472,8 @@ export class GameScene extends Phaser.Scene {
   private checkCollisions() {
     const bx = this.px + 1;
     const by = this.py + 2;
-    const bw = PW - 2;
-    const bh = PH - 3;
+    const bw = this.pw - 2;
+    const bh = this.ph - 3;
     const overlap = (x: number, y: number, w: number, h: number) =>
       bx < x + w && bx + bw > x && by < y + h && by + bh > y;
 
@@ -1451,7 +1515,7 @@ export class GameScene extends Phaser.Scene {
       if (this.isBumper(g)) {
         if (g.def.kind === 'binks' && (this.laser || g.pause > 0)) continue; // busy chasing the dot / sniffing a pint
         if (this.knock === 0) {
-          const side = this.px + PW / 2 < x + w / 2 ? -1 : 1;
+          const side = this.px + this.pw / 2 < x + w / 2 ? -1 : 1;
           this.knock = 22;
           this.vx = side * 2.2;
           this.vy = -2.6;
@@ -1478,6 +1542,13 @@ export class GameScene extends Phaser.Scene {
     sfx.collect();
     this.burst(it.x + 4, it.y + 4, PAL.yellow, 'dot', 6);
     const toastBefore = this.toast;
+    if (this.bm) {
+      this.treats++;
+      if (this.treats % 3 === 0) {
+        this.zoomies = 300;
+        this.say('TREATS! ZOOMIES!!!', 100);
+      } else this.say(`TREAT! ${3 - (this.treats % 3)} MORE FOR THE ZOOMIES`, 70);
+    }
     if (it.key === 'torch') this.hasTorch = true;
     if (this.zm) {
       const forWho = CHARACTERS.find((c) => CURES[c.id] === it.key && !this.cured.has(c.id) && c.id !== this.hero.id);
@@ -1502,6 +1573,255 @@ export class GameScene extends Phaser.Scene {
     this.save();
   }
 
+
+
+  // ------------------------------------------------------------------ Binks mode: herding
+  /** Everyone starts where they'd normally stand; Luke is asleep, obviously. */
+  private initHerd(saved?: Record<string, { room: string; x: number; y: number; state: string }>) {
+    this.herd = [];
+    for (const room of Object.values(ROOMS)) {
+      let i = 0;
+      room.map.forEach((row, r) => {
+        for (let c = 0; c < row.length; c++) {
+          if (row[c] !== 'N') continue;
+          const spec = room.npcs[i++];
+          if (!spec) continue;
+          const sv = saved?.[spec.id];
+          this.herd.push({
+            def: charById(spec.id),
+            room: sv?.room ?? room.id,
+            x: sv?.x ?? c * T + 4,
+            y: sv?.y ?? (r + 1) * T,
+            vy: 0,
+            dir: Math.random() < 0.5 ? -1 : 1,
+            state: (sv?.state as Herd['state']) ?? (spec.id === 'luke' ? 'sleep' : 'wander'),
+            t: 0,
+            say: '',
+            sayT: 0,
+            slot: 0,
+            sprite: null,
+          });
+        }
+      });
+    }
+    this.renumberSettled();
+  }
+
+  private renumberSettled() {
+    let k = 0;
+    for (const m of this.herd) if (m.state === 'settled') m.slot = k++;
+  }
+
+  private spawnHerdSprites(roomId: string) {
+    for (const m of this.herd) {
+      m.sprite?.destroy();
+      m.sprite = m.room === roomId ? this.add.image(m.x, m.y, `${m.def.id}_idle`).setOrigin(0.5, 1).setDepth(3) : null;
+    }
+  }
+
+  private herdSupport(x: number, y: number) {
+    const r = Math.round(y / T);
+    if (Math.abs(y - r * T) > 0.6) return false;
+    return [x - 3, x + 3].some((px) => {
+      const ch = this.tile(Math.floor(px / T), r);
+      return isSupport(ch) || ch === 'S';
+    });
+  }
+
+  private firePitCentre(): number | null {
+    const pit = this.firePitTiles();
+    if (!pit.length) return null;
+    return ((Math.min(...pit.map((p) => p.c)) + Math.max(...pit.map((p) => p.c)) + 1) * T) / 2;
+  }
+
+  private stepHerd() {
+    if (!this.bm) return;
+    if (this.barkT > 0) this.barkT--;
+    if (this.barkCd > 0) this.barkCd--;
+    const fire = this.firePitCentre();
+    for (const m of [...this.herd]) {
+      if (m.room !== this.room.id) continue;
+      if (m.sayT > 0) m.sayT--;
+      // gravity: friends fall off ledges (and down through gaps into the room below)
+      if (!this.herdSupport(m.x, m.y)) {
+        m.vy = Math.min(m.vy + GRAV, MAX_FALL);
+        const ny = m.y + m.vy;
+        let landed = false;
+        for (let r = Math.ceil(m.y / T - 0.001); r * T <= ny; r++) {
+          if ([m.x - 3, m.x + 3].some((px) => isSupport(this.tile(Math.floor(px / T), r)))) {
+            m.y = r * T;
+            m.vy = 0;
+            landed = true;
+            break;
+          }
+        }
+        if (!landed) m.y = ny;
+        if (m.y > RH + 12) {
+          const below = this.room.exits.down;
+          if (below) this.moveHerd(m, below, m.x, m.y - RH);
+          else m.y = RH;
+        }
+        continue;
+      }
+      m.vy = 0;
+      if (m.state === 'sleep') {
+        continue;
+      }
+      // at the fire pit, friends find themselves a warm spot
+      if (fire !== null) {
+        if (m.state !== 'settled' && Math.abs(m.x - fire) < 34) {
+          m.state = 'settled';
+          this.renumberSettled();
+          m.say = ['LOVELY FIRE!', 'MARSHMALLOWS!', 'AH, THAT\'S BETTER', 'GOOD BOY, BINKS!'][m.slot % 4];
+          m.sayT = 90;
+          sfx.collect();
+          this.save();
+          if (this.herd.every((h) => h.state === 'settled')) {
+            this.say('EVERYONE IS HERE! BARK AT THE FIRE PIT!', 200);
+          } else this.say(`${m.def.name.toUpperCase()} IS AT THE FIRE! ${this.herd.filter((h) => h.state === 'settled').length}/${this.herd.length}`, 120);
+        }
+        if (m.state === 'settled') {
+          const side = m.slot % 2 ? 1 : -1;
+          const tx = Phaser.Math.Clamp(fire + side * (22 + Math.floor(m.slot / 2) * 12), 8, RW - 8);
+          if (Math.abs(tx - m.x) > 0.8) {
+            m.dir = tx > m.x ? 1 : -1;
+            m.x += m.dir * 0.6;
+          } else m.dir = fire > m.x ? 1 : -1;
+          continue;
+        }
+        if (m.state === 'wander') m.dir = fire > m.x ? 1 : -1; // drawn to the warmth
+      }
+      if (m.state === 'shoo' && --m.t <= 0) m.state = 'wander';
+      // Luke can't resist a little lie down
+      if (m.def.id === 'luke' && m.state === 'wander' && fire === null && Math.random() < 0.0009) {
+        m.state = 'sleep';
+        m.say = 'JUST A LITTLE LIE DOWN...';
+        m.sayT = 100;
+        continue;
+      }
+      if (m.state === 'wander' && fire === null && Math.random() < 0.006) continue; // a pause to look around
+      const sp = m.state === 'shoo' ? 0.95 : fire !== null ? 0.5 : 0.25;
+      const nx = m.x + m.dir * sp;
+      const lead = nx + m.dir * 4;
+      const col = Math.floor(lead / T);
+      const r = Math.round(m.y / T);
+      const wall = [1, 2].some((k) => isSolid(this.tile(col, r - k)));
+      const ground = isSupport(this.tile(col, r)) || this.tile(col, r) === 'S';
+      if (lead < 0 || lead > RW) {
+        const exit = lead < 0 ? this.room.exits.left : this.room.exits.right;
+        if (exit && m.state === 'shoo') {
+          this.moveHerd(m, exit, lead < 0 ? RW - 6 : 6, m.y);
+          continue;
+        }
+        m.dir *= -1;
+        continue;
+      }
+      if (wall || (!ground && m.state !== 'shoo')) {
+        m.dir *= -1; // turn round (only a shooed friend will step off a ledge)
+        continue;
+      }
+      m.x = nx;
+    }
+  }
+
+  /** A friend leaves this room for another. */
+  private moveHerd(m: Herd, room: string, x: number, y: number) {
+    m.sprite?.destroy();
+    m.sprite = null;
+    m.room = room;
+    m.x = x;
+    m.y = y;
+    m.vy = 0;
+    this.save();
+  }
+
+  private bark() {
+    if (this.barkCd > 0) return;
+    this.barkCd = 18;
+    this.barkT = 26;
+    sfx.bark();
+    const bx = this.px + this.pw / 2;
+    const by = this.py + this.ph;
+    for (const m of this.herd) {
+      if (m.room !== this.room.id || m.state === 'settled') continue;
+      if (Math.abs(m.x - bx) > 84 || Math.abs(m.y - by) > 48) continue;
+      if (m.state === 'sleep') m.say = 'WHA-? I\'M UP! I\'M UP!';
+      else m.say = REACTIONS[Math.floor(Math.random() * REACTIONS.length)];
+      m.sayT = 60;
+      m.state = 'shoo';
+      m.t = 170;
+      m.dir = m.x === bx ? this.facing : Math.sign(m.x - bx);
+    }
+    // the robot hoover is scared of a good bark
+    for (const g of this.guardians) {
+      if (g.def.kind === 'hoover' && Math.abs(g.x + 8 - bx) < 70 && Math.abs(g.y - by) < 30) {
+        g.pause = 150;
+        g.dir = g.x + 8 > bx ? 1 : -1;
+      }
+    }
+  }
+
+  private binksFinale() {
+    const n = this.herd.filter((m) => m.state === 'settled').length;
+    if (n === 0) {
+      this.say('NOBODY HERE YET! GO AND HERD SOME HUMANS', 140);
+      return;
+    }
+    this.talked = new Set(this.herd.filter((m) => m.state === 'settled').map((m) => m.def.id));
+    for (const m of this.herd) m.sprite?.setVisible(false);
+    this.say('WOOF! THE HUMANS LIGHT THE FIRE!', 90);
+    this.startFinale();
+  }
+
+  /** Sniffing: scent trails to treats in this room, and towards friends still wandering elsewhere. */
+  private drawSniff(g: Phaser.GameObjects.Graphics) {
+    g.fillStyle(PAL.ink, 0.35);
+    g.fillRect(0, 0, RW, RH);
+    const sx = this.px + this.pw / 2;
+    const sy = this.py + this.ph - 4;
+    const trail = (tx: number, ty: number, col: number) => {
+      const d = Math.hypot(tx - sx, ty - sy) || 1;
+      const nx = -(ty - sy) / d;
+      const ny = (tx - sx) / d;
+      for (let k = 8; k < d; k += 5) {
+        const w = Math.sin(k / 9 - this.frame / 6) * 3;
+        g.fillStyle(col, 0.5 + 0.5 * Math.sin(k / 7 - this.frame / 5));
+        g.fillRect(Math.round(sx + ((tx - sx) * k) / d + nx * w), Math.round(sy + ((ty - sy) * k) / d + ny * w), 2, 1);
+      }
+    };
+    const items = [...this.items].sort((a, b) => Math.abs(a.x - sx) - Math.abs(b.x - sx)).slice(0, 4);
+    for (const it of items) trail(it.x + 4, it.y + 4, PAL.lime);
+    const here = this.herd.filter((m) => m.room === this.room.id && m.state !== 'settled');
+    for (const m of here) trail(m.x, m.y - 10, PAL.orange);
+    // friends in other rooms: which way?
+    const away = this.herd.filter((m) => m.room !== this.room.id && m.state !== 'settled');
+    const byExit = new Map<string, number>();
+    for (const m of away) {
+      const dir = this.exitToward(m.room);
+      if (dir) byExit.set(dir, (byExit.get(dir) ?? 0) + 1);
+    }
+    for (const [dir, n] of byExit) {
+      const pos: Record<string, [number, number]> = { left: [30, sy], right: [RW - 30, sy], up: [RW / 2, 14], down: [RW / 2, RH - 14] };
+      const [x, y] = pos[dir];
+      trail(x, y, PAL.orange);
+      drawTextCentered(g, `${n} HUMAN${n > 1 ? 'S' : ''}`, Phaser.Math.Clamp(x, 30, RW - 30), y - 10, PAL.orange, PAL.ink);
+    }
+  }
+
+  /** The first exit to take from this room towards another room. */
+  private exitToward(target: string): string | null {
+    const seen = new Set([this.room.id]);
+    const q: { id: string; first: string }[] = [];
+    for (const [d, id] of Object.entries(this.room.exits)) if (id && ROOMS[id]) q.push({ id, first: d });
+    while (q.length) {
+      const c = q.shift()!;
+      if (c.id === target) return c.first;
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      for (const id of Object.values(ROOMS[c.id].exits)) if (id && ROOMS[id] && !seen.has(id)) q.push({ id, first: c.first });
+    }
+    return null;
+  }
 
   // ------------------------------------------------------------------ zombie night
   private spawnZombie(def: CharDef, x: number, feet: number) {
@@ -1588,8 +1908,8 @@ export class GameScene extends Phaser.Scene {
     if (this.tidyCd > 0) this.tidyCd--;
     const ws = this.worldSpeed();
     const dancing = this.abId === 'keyboard' && this.abT > 0;
-    const pcx = this.px + PW / 2;
-    const pfeet = this.py + PH;
+    const pcx = this.px + this.pw / 2;
+    const pfeet = this.py + this.ph;
     const playerSafe = this.lying || this.dying > 0 || this.nearStaticLight(pcx, pfeet - 10);
     let nearest = Infinity;
     for (const z of this.zombies) {
@@ -1668,7 +1988,7 @@ export class GameScene extends Phaser.Scene {
     const by = this.py + 2;
     for (const z of this.zombies) {
       if (z.state === 'hidden') continue;
-      const hit = bx < z.x + 7 && bx + PW - 2 > z.x + 1 && by < z.y && by + PH - 3 > z.y - 20;
+      const hit = bx < z.x + 7 && bx + this.pw - 2 > z.x + 1 && by < z.y && by + this.ph - 3 > z.y - 20;
       if (!hit) continue;
       const cure = CURES[z.def.id];
       if (this.held.has(cure)) {
@@ -1695,7 +2015,7 @@ export class GameScene extends Phaser.Scene {
       // bitten!
       zsfx('bite');
       this.bites++;
-      const side = this.px + PW / 2 < z.x + 4 ? -1 : 1;
+      const side = this.px + this.pw / 2 < z.x + 4 ? -1 : 1;
       this.knock = 20;
       this.vx = side * 2.2;
       this.vy = -2.4;
@@ -1733,9 +2053,9 @@ export class GameScene extends Phaser.Scene {
   private zombieDawn() {
     const n = this.cured.size;
     const total = CHARACTERS.length - 1;
-    const hero100 = this.isHundredPercent();
+    const hero100 = !this.bm && this.isHundredPercent();
     if (hero100) {
-      addLegend(this.hero.id, this.mode);
+      addLegend(this.hero.id, this.mode as 'cosy' | 'classic' | 'zombie');
       this.legendDawn = true;
     }
     const title = hero100 ? 'BROWNBER LEGEND!' : n >= total ? 'EVERYONE SAVED!' : n >= 6 ? 'DAWN BREAKS' : 'MORNING, AT LAST';
@@ -1766,7 +2086,7 @@ export class GameScene extends Phaser.Scene {
 
   /** Becca in zombie mode: point at a zombie you can cure, or towards a cure you still need. */
   private zombieHint(): boolean {
-    const pcx = this.px + PW / 2;
+    const pcx = this.px + this.pw / 2;
     const curable = this.zombies.filter((z) => this.held.has(CURES[z.def.id]));
     if (curable.length) {
       const z = curable.sort((a, b) => Math.abs(a.x - pcx) - Math.abs(b.x - pcx))[0];
@@ -1794,7 +2114,7 @@ export class GameScene extends Phaser.Scene {
       if (seen.has(q.id)) continue;
       seen.add(q.id);
       if (roomHasNeeded(q.id)) {
-        const cy = this.py + PH / 2;
+        const cy = this.py + this.ph / 2;
         const pos: Record<string, [number, number]> = { left: [6, cy], right: [RW - 6, cy], up: [RW / 2, 6], down: [RW / 2, RH - 6] };
         const [x, y] = pos[q.first];
         this.hint = { x, y, label: ROOMS[q.id].name.replace(/\s*\(.*\)/, '') };
@@ -1815,7 +2135,7 @@ export class GameScene extends Phaser.Scene {
     const flick = Math.sin(this.frame * 0.2) * 2;
     const lights = this.staticLights();
     const pr = (this.hasTorch ? 72 : 46) * (this.bitten > 0 ? 0.75 : 1) + flick;
-    lights.push({ x: this.px + PW / 2, y: this.py + 10, r: pr });
+    lights.push({ x: this.px + this.pw / 2, y: this.py + 10, r: pr });
     if (this.finale) for (const l of lights) l.r *= 2.2;
     for (const n of this.npcs) lights.push({ x: n.x, y: n.y - 10, r: 22 }); // cured friends glow a little
     for (let r = 0; r < ROWS; r++) {
@@ -1852,8 +2172,8 @@ export class GameScene extends Phaser.Scene {
     if (!pit.length) return false;
     const x0 = Math.min(...pit.map((p) => p.c)) * T - 12;
     const x1 = (Math.max(...pit.map((p) => p.c)) + 1) * T + 12;
-    const cx = this.px + PW / 2;
-    const feet = this.py + PH;
+    const cx = this.px + this.pw / 2;
+    const feet = this.py + this.ph;
     return cx > x0 && cx < x1 && Math.abs(feet - pit[0].r * T) <= 9;
   }
 
@@ -1876,7 +2196,7 @@ export class GameScene extends Phaser.Scene {
     this.lying = false;
     this.laser = this.pint = this.hint = null;
     this.toast = null;
-    playMusic(this.zm ? 'dawn' : 'victory');
+    playMusic(this.bm ? 'goodboy' : this.zm ? 'dawn' : 'victory');
     sfx.win();
     for (const z of this.zombies) {
       z.sprite.setVisible(false);
@@ -1894,8 +2214,8 @@ export class GameScene extends Phaser.Scene {
     const centre = (fx0 + fx1) / 2;
 
     // the hero steps back from the fire
-    this.px = fx0 - 14 - PW / 2;
-    this.py = this.footY(this.px + PW / 2, fireRow) - PH;
+    this.px = fx0 - 14 - this.pw / 2;
+    this.py = this.footY(this.px + this.pw / 2, fireRow) - this.ph;
     this.facing = 1;
 
     // everyone you talked to comes to the fire; Beth is always last (and 45 minutes late)
@@ -1905,7 +2225,7 @@ export class GameScene extends Phaser.Scene {
     for (let k = 1; slots.length < ids.length && k < 20; k++) {
       for (const side of [1, -1]) {
         const x = centre + side * (fx1 - fx0) / 2 + side * (k * 13 + 4);
-        if (x > 10 && x < RW - 10 && Math.abs(x - (this.px + PW / 2)) > 8) slots.push(x);
+        if (x > 10 && x < RW - 10 && Math.abs(x - (this.px + this.pw / 2)) > 8) slots.push(x);
       }
     }
     const friends = ids.map((id, i) => {
@@ -1936,7 +2256,16 @@ export class GameScene extends Phaser.Scene {
       title = 'A QUIET NIGHT';
       lines = ['JUST YOU, THE FIRE AND THE STARS.', 'TALK TO YOUR FRIENDS SO THEY COME TOO!'];
     }
-    if (this.zm) {
+    if (this.bm) {
+      const total = this.herd.length;
+      title = n >= total ? 'GOOD BOY!' : n >= 7 ? 'GOOD-ISH BOY' : "WHO'S A GOOD BOY?";
+      lines =
+        n >= total
+          ? ['EVERY SINGLE HUMAN HERDED TO THE FIRE.', 'WARMEST SPOT AND A SAUSAGE FOR BINKS!']
+          : ['SOME HUMANS ARE STILL LOST IN THE HALL.', 'BINKS GETS A SAUSAGE ANYWAY.'];
+      lines.push('', `HERDED ${n}/${total}   TREATS ${this.collected.size}/${TOTAL_ITEMS}`, `TIME ${this.timeString()}`);
+      star = n >= total;
+    } else if (this.zm) {
       const total = CHARACTERS.length - 1;
       if (n >= total) {
         title = 'NOBODY LEFT BEHIND';
@@ -1959,7 +2288,7 @@ export class GameScene extends Phaser.Scene {
     let speechAt = 0;
     let speaker: CharDef | null = null;
     if (hero100) {
-      addLegend(this.hero.id, this.mode);
+      addLegend(this.hero.id, this.mode as 'cosy' | 'classic' | 'zombie');
       title = 'BROWNBER LEGEND';
       const name = this.hero.name.toUpperCase();
       lines = this.zm
@@ -2158,7 +2487,9 @@ export class GameScene extends Phaser.Scene {
         g.fillStyle(PAL.yellow, 1);
         g.fillRect(x + 5 + i * 4, y + ch - 9, 2, 2);
       }
-      const unmet = r.npcs.filter((n) => n.id !== this.hero.id && !(this.zm ? this.cured : this.talked).has(n.id)).length;
+      const unmet = this.bm
+        ? this.herd.filter((m) => m.room === r.id && m.state !== 'settled').length
+        : r.npcs.filter((n) => n.id !== this.hero.id && !(this.zm ? this.cured : this.talked).has(n.id)).length;
       for (let i = 0; i < unmet; i++) {
         g.fillStyle(PAL.lime, 1);
         g.fillRect(x + cw - 8 - i * 4, y + ch - 9, 2, 2);
@@ -2229,12 +2560,12 @@ export class GameScene extends Phaser.Scene {
     if (this.pint && --this.pint.t <= 0) this.pint = null;
     if (this.abId === 'laser' && this.abT > 0) {
       this.laser = {
-        x: Phaser.Math.Clamp(this.px + PW / 2 + this.facing * 56, 4, RW - 4),
-        y: this.py + PH - 1,
+        x: Phaser.Math.Clamp(this.px + this.pw / 2 + this.facing * 56, 4, RW - 4),
+        y: this.py + this.ph - 1,
       };
     } else this.laser = null;
     if (this.abId === 'keyboard' && this.abT > 0 && this.frame % 12 === 0) {
-      this.burst(this.px + PW / 2, this.py + 4, [PAL.yellow, PAL.lime, PAL.white][this.frame % 3], 'note', 1);
+      this.burst(this.px + this.pw / 2, this.py + 4, [PAL.yellow, PAL.lime, PAL.white][this.frame % 3], 'note', 1);
     }
     if (this.abId === 'quiz' && this.abT === 0) this.hint = null;
   }
@@ -2272,9 +2603,13 @@ export class GameScene extends Phaser.Scene {
           ok = false;
           break;
         }
-        this.pint = { x: this.px + PW / 2 + this.facing * 8, y: this.py + PH, t: a.duration };
+        this.pint = { x: this.px + this.pw / 2 + this.facing * 8, y: this.py + this.ph, t: a.duration };
         this.say('PINT?', 60);
         sfx.select();
+        break;
+      case 'sniff':
+        this.say('SNIFF SNIFF...', 60);
+        sfx.blip(260);
         break;
       case 'quiz':
         ok = this.zm ? this.zombieHint() : this.makeHint();
@@ -2285,7 +2620,7 @@ export class GameScene extends Phaser.Scene {
           // Tom: a speech so moving that nearby zombies stop to listen
           let n = 0;
           for (const z of this.zombies) {
-            if (z.state !== 'hidden' && Math.hypot(z.x - this.px, z.y - this.py - PH) < 110) {
+            if (z.state !== 'hidden' && Math.hypot(z.x - this.px, z.y - this.py - this.ph) < 110) {
               z.state = 'still';
               z.why = 'speech';
               z.t = 260;
@@ -2332,7 +2667,7 @@ export class GameScene extends Phaser.Scene {
     let best: Item | null = null;
     let bd = Infinity;
     for (const it of this.items) {
-      const d = Math.hypot(it.x + 4 - (this.px + PW / 2), it.y + 4 - (this.py + PH / 2));
+      const d = Math.hypot(it.x + 4 - (this.px + this.pw / 2), it.y + 4 - (this.py + this.ph / 2));
       if (d < bd) {
         bd = d;
         best = it;
@@ -2363,7 +2698,7 @@ export class GameScene extends Phaser.Scene {
       if (seen.has(q.id)) continue;
       seen.add(q.id);
       if (this.remainingIn(q.id) > 0) {
-        const cy = this.py + PH / 2;
+        const cy = this.py + this.ph / 2;
         const pos: Record<string, [number, number]> = {
           left: [6, cy],
           right: [RW - 6, cy],
@@ -2385,8 +2720,8 @@ export class GameScene extends Phaser.Scene {
       this.say(this.piles >= 3 ? 'BEEZ HAS LEFT ENOUGH STUFF HERE' : 'NEED TO BE STANDING', 90);
       return false;
     }
-    const c = Math.floor((this.px + PW / 2) / T);
-    const rFeet = Math.round((this.py + PH) / T);
+    const c = Math.floor((this.px + this.pw / 2) / T);
+    const rFeet = Math.round((this.py + this.ph) / T);
     const r = rFeet - 1;
     const headRow = Math.floor((this.py - T) / T);
     if (r < 0 || this.tile(c, r) !== '.' || isSolid(this.tile(c, headRow)) || headRow < 0) {
@@ -2406,8 +2741,8 @@ export class GameScene extends Phaser.Scene {
     const c = this.pal;
     if (!c) return;
     if (Number.isNaN(c.x)) {
-      c.x = this.px + PW / 2 - this.facing * 14;
-      c.y = this.py + PH;
+      c.x = this.px + this.pw / 2 - this.facing * 14;
+      c.y = this.py + this.ph;
     }
     if (c.woof > 0) c.woof--;
     if (c.fetch) {
@@ -2431,7 +2766,7 @@ export class GameScene extends Phaser.Scene {
       }
       return;
     }
-    const tx = this.px + PW / 2 - this.facing * 14;
+    const tx = this.px + this.pw / 2 - this.facing * 14;
     const before = c.x;
     c.x += (tx - c.x) * 0.12;
     // Binks stays on the ground while you're in the air, and hops to your level once you land
@@ -2440,7 +2775,7 @@ export class GameScene extends Phaser.Scene {
       for (let r = Math.max(0, Math.floor((c.y - 2) / T)); r < ROWS; r++) if (isSupport(this.tile(col, r))) return r * T;
       return c.y;
     };
-    const ty = this.grounded || this.lying ? this.py + PH : groundUnder();
+    const ty = this.grounded || this.lying ? this.py + this.ph : groundUnder();
     if (Math.abs(ty - c.y) > 0.5) c.y += Phaser.Math.Clamp((ty - c.y) * 0.2, -3, 3.5);
     else c.y = ty;
     if (Math.abs(c.x - before) > 0.2 && !this.lying) c.phase += 0.25;
@@ -2449,8 +2784,8 @@ export class GameScene extends Phaser.Scene {
   /** Debra: nearby items drift towards her. */
   private stepTidy() {
     if (this.abId !== 'tidy') return;
-    const cx = this.px + PW / 2;
-    const cy = this.py + PH / 2;
+    const cx = this.px + this.pw / 2;
+    const cy = this.py + this.ph / 2;
     for (const it of this.items) {
       const dx = cx - (it.x + 4);
       const dy = cy - (it.y + 4);
@@ -2467,19 +2802,19 @@ export class GameScene extends Phaser.Scene {
   }
 
   private checkExits() {
-    const cx = this.px + PW / 2;
-    const cy = this.py + PH / 2;
+    const cx = this.px + this.pw / 2;
+    const cy = this.py + this.ph / 2;
     const ex = this.room.exits;
     if (cx < 0) {
       if (ex.left) {
         this.loadRoom(ex.left);
         this.px += RW;
-      } else this.px = -PW / 2;
+      } else this.px = -this.pw / 2;
     } else if (cx > RW) {
       if (ex.right) {
         this.loadRoom(ex.right);
         this.px -= RW;
-      } else this.px = RW - PW / 2;
+      } else this.px = RW - this.pw / 2;
     } else if (cy < 0 && ex.up) {
       this.loadRoom(ex.up);
       this.py += RH;
@@ -2495,9 +2830,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private nearNpc(): Npc | null {
-    const cx = this.px + PW / 2;
+    const cx = this.px + this.pw / 2;
     for (const n of this.npcs) {
-      if (Math.abs(n.x - cx) < 18 && Math.abs(n.y - (this.py + PH)) < 12) return n;
+      if (Math.abs(n.x - cx) < 18 && Math.abs(n.y - (this.py + this.ph)) < 12) return n;
     }
     return null;
   }
@@ -2528,7 +2863,7 @@ export class GameScene extends Phaser.Scene {
       this.talked.add(n.def.id);
       this.save();
     }
-    n.sprite.setFlipX(this.px + PW / 2 < n.x);
+    n.sprite.setFlipX(this.px + this.pw / 2 < n.x);
     this.showPortrait(lines[0].who);
     input.clearLatches();
   }
@@ -2577,21 +2912,28 @@ export class GameScene extends Phaser.Scene {
     let frame: Frame = 'idle';
     if (!this.grounded) frame = 'jump';
     else if (Math.abs(this.vx) > 0.3 && this.knock === 0) frame = Math.floor(this.animT / 6) % 2 ? 'run1' : 'run2';
+    let tex = `${this.hero.id}_${frame}`;
+    if (this.bm) {
+      // Binks: a 4-frame gallop, a pounce, a bark, and nose-down sniffing
+      const run = ['run1', 'run2', 'run3', 'run4'][Math.floor(this.animT / (this.zoomies > 0 ? 3 : 5)) % 4];
+      const bf = this.state === 'finale' ? 'sit' : !this.grounded ? 'jump' : this.barkT > 0 ? 'bark' : Math.abs(this.vx) > 0.3 ? run : this.abId === 'sniff' && this.abT > 0 ? 'sniff' : 'idle';
+      tex = this.textures.exists(`binks_${bf}`) ? `binks_${bf}` : 'binks_a';
+    }
     this.player
-      .setTexture(`${this.hero.id}_${frame}`)
-      .setPosition(Math.round(this.px + PW / 2), Math.round(this.py + PH))
+      .setTexture(tex)
+      .setPosition(Math.round(this.px + this.pw / 2), Math.round(this.py + this.ph))
       .setFlipX(this.facing < 0)
       .setVisible(this.dying > 0 ? Math.floor(this.dying / 3) % 2 === 0 : this.invuln > 0 ? Math.floor(this.invuln / 4) % 2 === 0 : true);
     if (this.dying > 0) this.player.setAngle((45 - this.dying) * 8);
     else if (this.lying) {
       this.player.setTexture(`${this.hero.id}_idle`).setAngle(this.facing > 0 ? -90 : 90);
-      this.player.setY(Math.round(this.py + PH - 8));
+      this.player.setY(Math.round(this.py + this.ph - 8));
     } else this.player.setAngle(0);
 
     // Binks the companion (Tom and Luke)
     if (this.pal) {
       const c = this.pal;
-      const moving = !!c.fetch || Math.abs(c.x - (this.px + PW / 2 - this.facing * 14)) > 2;
+      const moving = !!c.fetch || Math.abs(c.x - (this.px + this.pw / 2 - this.facing * 14)) > 2;
       const hop = moving ? Math.abs(Math.sin(c.phase)) * 5 : 0;
       c.sprite
         .setTexture(moving && Math.floor(c.phase / 1.5) % 2 ? 'binks_b' : 'binks_a')
@@ -2642,10 +2984,21 @@ export class GameScene extends Phaser.Scene {
       z.want.setPosition(Math.round(z.x + 4), Math.round(z.y - 25 - bh / 2 - 1 + bob));
     }
 
+    // Binks mode: the roaming friends
+    for (const m of this.herd) {
+      if (!m.sprite) continue;
+      const moving = m.state === 'shoo' || (m.state !== 'sleep' && m.vy === 0 && this.frame % 2 === 0 && m.state !== 'settled');
+      const f = m.vy > 0 ? 'jump' : m.state === 'shoo' ? (Math.floor(this.frame / 6) % 2 ? 'run1' : 'run2') : moving ? (Math.floor(this.frame / 10) % 2 ? 'run1' : 'run2') : 'idle';
+      m.sprite.setTexture(`${m.def.id}_${m.state === 'sleep' ? 'idle' : f}`).setFlipX(m.dir < 0);
+      if (m.state === 'sleep') m.sprite.setAngle(-90).setPosition(Math.round(m.x), Math.round(m.y - 8));
+      else m.sprite.setAngle(0).setPosition(Math.round(m.x), Math.round(m.y));
+      if (this.state === 'finale') m.sprite.setVisible(false);
+    }
+
     // NPCs face the player (Luke is having a lie down)
     for (const n of this.npcs) {
       if (n.pose === 'lying') n.sprite.setAngle(-90).setY(n.y - 8).setFlipX(false);
-      else n.sprite.setFlipX(this.px + PW / 2 < n.x);
+      else n.sprite.setFlipX(this.px + this.pw / 2 < n.x);
     }
 
     this.drawDynamic();
@@ -2767,6 +3120,16 @@ export class GameScene extends Phaser.Scene {
   private drawFx() {
     const g = this.fx;
     g.clear();
+    if (this.bm) {
+      if (this.abId === 'sniff' && this.abT > 0) this.drawSniff(g);
+      for (const m of this.herd) {
+        if (!m.sprite || m.sayT <= 0) continue;
+        drawTextCentered(g, m.say, Phaser.Math.Clamp(m.x, 40, RW - 40), m.y - 32, PAL.white, PAL.ink);
+      }
+      for (const m of this.herd) if (m.sprite && m.state === 'sleep') drawText(g, 'Z', m.x + 4 + (Math.floor(this.frame / 20) % 3) * 2, m.y - 14 - (Math.floor(this.frame / 20) % 3) * 3, PAL.white, PAL.ink);
+      if (this.barkT > 0) drawTextCentered(g, 'WOOF!', this.px + this.pw / 2 + this.facing * 10, this.py - 10, PAL.yellow, PAL.ink);
+      if (this.zoomies > 0 && this.frame % 3 === 0) this.parts.push({ x: this.px + this.pw / 2 - this.facing * 8, y: this.py + this.ph - 2, vx: -this.facing * 0.5, vy: -0.3, t: 18, color: PAL.yellow, kind: 'dot' });
+    }
     if (this.zm) {
       // low creeping fog and a sickly green moonlight
       g.fillStyle(0x4aff8a, 0.035);
@@ -2784,7 +3147,7 @@ export class GameScene extends Phaser.Scene {
           if (z.why === 'dance') this.parts.length < 80 && this.frame % 20 === 0 && this.burst(z.x + 4, z.y - 22, PAL.lime, 'note', 1);
         }
       }
-      if (this.bitten > 0) drawTextCentered(g, 'BRAAAINS', this.px + PW / 2, this.py - 12, PAL.lime, PAL.ink);
+      if (this.bitten > 0) drawTextCentered(g, 'BRAAAINS', this.px + this.pw / 2, this.py - 12, PAL.lime, PAL.ink);
     }
     // Beth: the world goes slow and dreamy
     if (this.abId === 'late' && this.abT > 0) {
@@ -2804,7 +3167,7 @@ export class GameScene extends Phaser.Scene {
     // Maffa's laser dot
     if (this.laser) {
       g.fillStyle(PAL.red, 0.35);
-      const hx = this.px + PW / 2 + this.facing * 5;
+      const hx = this.px + this.pw / 2 + this.facing * 5;
       const hy = this.py + 13;
       for (let i = 0; i <= 10; i++) g.fillRect(Math.round(hx + ((this.laser.x - hx) * i) / 10), Math.round(hy + ((this.laser.y - hy) * i) / 10), 1, 1);
       g.fillStyle(PAL.red, 1);
@@ -2827,7 +3190,7 @@ export class GameScene extends Phaser.Scene {
     }
     // Becca's hint
     if (this.hint && this.abT > 0) {
-      const sx = this.px + PW / 2;
+      const sx = this.px + this.pw / 2;
       const sy = this.py + 8;
       const d = Math.hypot(this.hint.x - sx, this.hint.y - sy) || 1;
       const off = (this.frame * 0.6) % 8;
@@ -2843,7 +3206,7 @@ export class GameScene extends Phaser.Scene {
     }
     // Sophie's cockatiel
     if (this.abId === 'glide' && this.dying === 0) {
-      const bx = Math.round(this.px + PW / 2 - 3);
+      const bx = Math.round(this.px + this.pw / 2 - 3);
       const by = Math.round(this.gliding ? this.py - 8 : this.py - 3);
       const flap = this.gliding ? Math.floor(this.frame / 4) % 2 : 0;
       if (this.gliding || this.frame % 240 < 200) {
@@ -2863,7 +3226,7 @@ export class GameScene extends Phaser.Scene {
       const k = Math.floor(this.frame / 20) % 3;
       drawText(g, 'Z', x + k * 2, y - k * 3, PAL.white, PAL.ink);
     };
-    if (this.lying) zzz(Math.round(this.px + PW / 2), Math.round(this.py + 4));
+    if (this.lying) zzz(Math.round(this.px + this.pw / 2), Math.round(this.py + 4));
     for (const n of this.npcs) if (n.pose === 'lying') zzz(n.x + 4, n.y - 22);
     if (this.pal && this.pal.woof > 0) drawText(g, 'WOOF!', Math.round(this.pal.x - 14), Math.round(this.pal.y - 22), PAL.yellow, PAL.ink);
     // particles (notes and sparkles)
@@ -2951,7 +3314,7 @@ export class GameScene extends Phaser.Scene {
     const time = this.timeString();
     const meter = this.abilityMeter();
     const left = this.items.length;
-    const key = `${this.room.id}|${this.collected.size}|${left}|${time}|${this.lives}|${Math.floor(meter * 12)}|${this.hasLighter}|${this.cured.size}|${this.bitten > 0}`;
+    const key = `${this.herd.filter((m) => m.state === 'settled').length}|${this.zoomies > 0}|${this.room.id}|${this.collected.size}|${left}|${time}|${this.lives}|${Math.floor(meter * 12)}|${this.hasLighter}|${this.cured.size}|${this.bitten > 0}`;
     // room name, shortened if it would collide with the items-left counter
     let roomName = this.room.name;
     if (roomName.length * 6 > RW - 40) roomName = roomName.replace(/\s*\(.*\)/, '');
@@ -2988,7 +3351,7 @@ export class GameScene extends Phaser.Scene {
       const txt = `*${left}`;
       drawText(g, txt, RW - 3 - txt.length * 6, RH + 1, th.barText);
     }
-    drawText(g, `ITEMS ${String(this.collected.size).padStart(2, '0')}/${TOTAL_ITEMS}`, 2, RH + 9, PAL.yellow);
+    drawText(g, `${this.bm ? 'TREATS' : 'ITEMS'} ${String(this.collected.size).padStart(2, '0')}/${TOTAL_ITEMS}`, 2, RH + 9, PAL.yellow);
     drawTextCentered(g, time, RW / 2 + 24, RH + 9, PAL.white);
     // ability meter: full and bright when ready
     g.fillStyle(PAL.slate, 1);
@@ -3005,6 +3368,9 @@ export class GameScene extends Phaser.Scene {
     }
     if (this.mode === 'classic') {
       drawText(g, '@'.repeat(Math.max(0, this.lives)), RW - 2 - this.lives * 6, RH + 9, PAL.red);
+    } else if (this.bm) {
+      const herded = `HERDED ${this.herd.filter((m) => m.state === 'settled').length}/${this.herd.length}`;
+      drawText(g, herded, RW - 2 - herded.length * 6, RH + 9, this.zoomies > 0 ? PAL.yellow : PAL.orange);
     } else if (this.zm) {
       const cured = `CURED ${this.cured.size}/${CHARACTERS.length - 1}`;
       drawText(g, cured, RW - 2 - cured.length * 6, RH + 9, this.bitten > 0 ? PAL.red : PAL.lime);

@@ -1459,6 +1459,7 @@ export class GameScene extends Phaser.Scene {
     this.items = this.items.filter((i) => i !== it);
     sfx.collect();
     this.burst(it.x + 4, it.y + 4, PAL.yellow, 'dot', 6);
+    const toastBefore = this.toast;
     if (it.key === 'torch') this.hasTorch = true;
     if (this.zm) {
       const forWho = CHARACTERS.find((c) => CURES[c.id] === it.key && !this.cured.has(c.id) && c.id !== this.hero.id);
@@ -1477,6 +1478,8 @@ export class GameScene extends Phaser.Scene {
     if (this.collected.size >= TOTAL_ITEMS) {
       sfx.win();
       this.say('ALL PARTY BITS FOUND! TO THE FIRE PIT!', 200);
+    } else if (this.items.length === 0 && this.toast === toastBefore) {
+      this.say(`ROOM CLEARED! ${TOTAL_ITEMS - this.collected.size} ITEMS TO GO`, 110);
     }
     this.save();
   }
@@ -2855,7 +2858,12 @@ export class GameScene extends Phaser.Scene {
   private drawHud() {
     const time = this.timeString();
     const meter = this.abilityMeter();
-    const key = `${this.room.id}|${this.collected.size}|${time}|${this.lives}|${Math.floor(meter * 12)}|${this.hasLighter}|${this.cured.size}|${this.bitten > 0}`;
+    const left = this.items.length;
+    const key = `${this.room.id}|${this.collected.size}|${left}|${time}|${this.lives}|${Math.floor(meter * 12)}|${this.hasLighter}|${this.cured.size}|${this.bitten > 0}`;
+    // room name, shortened if it would collide with the items-left counter
+    let roomName = this.room.name;
+    if (roomName.length * 6 > RW - 40) roomName = roomName.replace(/\s*\(.*\)/, '');
+    if (roomName.length * 6 > RW - 40) roomName = roomName.slice(0, Math.floor((RW - 40) / 6));
     if (key === this.hudKey) return;
     this.hudKey = key;
     const g = this.hud;
@@ -2871,7 +2879,7 @@ export class GameScene extends Phaser.Scene {
       g.fillRect(0, RH + 4, RW, 3);
       g.fillStyle(darken(th.bar, 0.45), 1);
       g.fillRect(0, RH + 7, RW, 1);
-      drawTextCentered(g, this.room.name, RW / 2, RH + 1, th.barText, th.barText === PAL.ink ? lighten(th.bar, 0.5) : darken(th.bar, 0.55));
+      drawTextCentered(g, roomName, RW / 2, RH + 1, th.barText, th.barText === PAL.ink ? lighten(th.bar, 0.5) : darken(th.bar, 0.55));
       g.fillStyle(0x10142c, 1);
       g.fillRect(0, RH + 8, RW, 8);
       g.fillStyle(0x2a3060, 1);
@@ -2879,12 +2887,16 @@ export class GameScene extends Phaser.Scene {
     } else {
       g.fillStyle(th.bar, 1);
       g.fillRect(0, RH, RW, 8);
-      drawTextCentered(g, this.room.name, RW / 2, RH + 1, th.barText);
+      drawTextCentered(g, roomName, RW / 2, RH + 1, th.barText);
       g.fillStyle(PAL.ink, 1);
       g.fillRect(0, RH + 8, RW, 8);
     }
-    if (this.zm) drawText(g, `CURED ${String(this.cured.size).padStart(2, '0')}/${CHARACTERS.length - 1}`, 2, RH + 9, PAL.lime);
-    else drawText(g, `ITEMS ${String(this.collected.size).padStart(2, '0')}/${TOTAL_ITEMS}`, 2, RH + 9, PAL.yellow);
+    // items left in this room, on the name bar
+    if (left > 0) {
+      const txt = `*${left}`;
+      drawText(g, txt, RW - 3 - txt.length * 6, RH + 1, th.barText);
+    }
+    drawText(g, `ITEMS ${String(this.collected.size).padStart(2, '0')}/${TOTAL_ITEMS}`, 2, RH + 9, PAL.yellow);
     drawTextCentered(g, time, RW / 2 + 24, RH + 9, PAL.white);
     // ability meter: full and bright when ready
     g.fillStyle(PAL.slate, 1);
@@ -2902,7 +2914,8 @@ export class GameScene extends Phaser.Scene {
     if (this.mode === 'classic') {
       drawText(g, '@'.repeat(Math.max(0, this.lives)), RW - 2 - this.lives * 6, RH + 9, PAL.red);
     } else if (this.zm) {
-      drawText(g, 'ZOMBIE', RW - 38, RH + 9, this.bitten > 0 ? PAL.red : PAL.lime);
+      const cured = `CURED ${this.cured.size}/${CHARACTERS.length - 1}`;
+      drawText(g, cured, RW - 2 - cured.length * 6, RH + 9, this.bitten > 0 ? PAL.red : PAL.lime);
     } else {
       drawText(g, 'COSY', RW - 26, RH + 9, PAL.lime);
     }

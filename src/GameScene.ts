@@ -11,6 +11,28 @@ import { loadSave, writeSave, clearSave, type SaveData } from './save';
 import { CHARACTERS } from './characters';
 import { is16 } from './settings';
 import { darken, lighten, mix } from './colour';
+import { CURES, CURED_LINES, ZOMBIE_DAWN, ZOMBIE_ITEM_OVERRIDES, ZOMBIE_START } from './zombie';
+
+/** Zombie-mode sounds come from the audio module; call them only if they exist. */
+const zsfx = (name: string, ...args: number[]) => {
+  const f = (sfx as unknown as Record<string, ((...a: number[]) => void) | undefined>)[name];
+  if (f) f(...args);
+};
+
+interface Zombie {
+  def: CharDef;
+  x: number; // left of hitbox
+  y: number; // feet
+  dir: number;
+  speed: number;
+  state: 'walk' | 'chase' | 'still' | 'hidden';
+  t: number; // timer for still/hidden
+  why: string; // why it's standing still (dance, drink, speech, stun)
+  phase: number;
+  sprite: Phaser.GameObjects.Image;
+  bubble: Phaser.GameObjects.Image;
+  want: Phaser.GameObjects.Image;
+}
 
 // ---- world constants ----
 const T = 8;
@@ -36,7 +58,7 @@ const PH = 22;
 const STEP = 1000 / 60;
 const MINUTES_PER_FRAME = 15 / 3600; // 1 real minute = 15 game minutes
 
-type Mode = 'cosy' | 'classic';
+type Mode = 'cosy' | 'classic' | 'zombie';
 
 const isSolid = (ch: string) => '#XBGD'.includes(ch);
 const isOneWay = (ch: string) => '=-C<>~O'.includes(ch);
@@ -128,6 +150,17 @@ export class GameScene extends Phaser.Scene {
   private frame = 0;
   private acc = 0;
   private state: 'play' | 'talk' | 'won' | 'over' | 'map' | 'finale' = 'play';
+  // zombie night
+  private zombies: Zombie[] = [];
+  private cured = new Set<string>();
+  private held = new Set<string>(); // cure items you're carrying
+  private hasTorch = false;
+  private bitten = 0; // frames left being a zombie yourself
+  private bites = 0;
+  private tidyCd = 0;
+  private beatT = 0;
+  private roomT = 0; // frame you entered the room (zombies give you a moment)
+  private dark!: Phaser.GameObjects.Graphics;
   private talked = new Set<string>();
   private visited = new Set<string>();
   private hasLighter = false;
@@ -193,13 +226,18 @@ export class GameScene extends Phaser.Scene {
     this.mode = this.pending?.mode ?? data.mode ?? 'cosy';
     this.talked = new Set();
     this.visited = new Set();
+    this.zombies = [];
+    this.cured = new Set();
+    this.held = new Set();
+    this.hasTorch = false;
+    this.bitten = this.bites = this.tidyCd = this.beatT = 0;
     this.hasLighter = false;
     this.deaths = 0;
     this.lastSave = 0;
     this.finale = null;
     this.lives = 5;
     this.collected.clear();
-    this.clock = 16 * 60;
+    this.clock = this.mode === 'zombie' ? ZOMBIE_START : 16 * 60;
     this.frame = 0;
     this.acc = 0;
     this.state = 'play';
@@ -215,6 +253,10 @@ export class GameScene extends Phaser.Scene {
     this.laser = this.pint = this.hint = null;
     this.pal = null;
     this.parts = [];
+  }
+
+  private get zm() {
+    return this.mode === 'zombie';
   }
 
   private get hasCompanion() {
@@ -237,6 +279,7 @@ export class GameScene extends Phaser.Scene {
       const sprite = this.add.image(0, 0, 'binks_a').setOrigin(0.5, 1).setDepth(5);
       this.pal = { x: NaN, y: 0, phase: 0, sprite, fetch: null, woof: 0 };
     }
+    this.dark = this.add.graphics().setDepth(5.5);
     this.fx = this.add.graphics().setDepth(6);
     this.hud = this.add.graphics().setDepth(10);
     this.ui = this.add.graphics().setDepth(11);
@@ -258,6 +301,10 @@ export class GameScene extends Phaser.Scene {
     if (sv && ROOMS[sv.room]) {
       // carry on from the save
       sv.collected.forEach((k) => this.collected.add(k));
+      (sv.cured ?? []).forEach((k) => this.cured.add(k));
+      (sv.held ?? []).forEach((k) => this.held.add(k));
+      this.hasTorch = !!sv.torch;
+      this.bites = sv.bites ?? 0;
       sv.talked.forEach((k) => this.talked.add(k));
       sv.visited.forEach((k) => this.visited.add(k));
       this.clock = sv.clock;
@@ -290,6 +337,10 @@ export class GameScene extends Phaser.Scene {
       x: this.checkpoint.x,
       y: this.checkpoint.y,
       collected: [...this.collected],
+      cured: [...this.cured],
+      held: [...this.held],
+      torch: this.hasTorch,
+      bites: this.bites,
       talked: [...this.talked],
       visited: [...this.visited],
       clock: this.clock,
@@ -303,8 +354,9 @@ export class GameScene extends Phaser.Scene {
   private loadRoom(id: string) {
     const room = ROOMS[id];
     this.room = room;
+    this.roomT = this.frame;
     this.visited.add(id);
-    playMusic(room.music ?? 'house');
+    playMusic(this.zm ? (room.theme.motifKind === 'sky' ? 'zombie_outside' : 'zombie_house') : room.music ?? 'house');
     this.tiles = room.map.map((row) => row.padEnd(COLS, '.').slice(0, COLS).split(''));
     this.crumble.clear();
     this.vents = [];
@@ -312,6 +364,12 @@ export class GameScene extends Phaser.Scene {
     for (const s of this.items) s.sprite.destroy();
     for (const g of this.guardians) g.sprite.destroy();
     for (const n of this.npcs) n.sprite.destroy();
+    for (const z of this.zombies) {
+      z.sprite.destroy();
+      z.bubble.destroy();
+      z.want.destroy();
+    }
+    this.zombies = [];
     this.items = [];
     this.guardians = [];
     this.npcs = [];
@@ -325,7 +383,8 @@ export class GameScene extends Phaser.Scene {
           const idx = itemIdx++;
           this.tiles[r][c] = '.';
           if (this.collected.has(`${id}:${idx}`)) continue;
-          const key = room.items[idx % room.items.length] ?? 'cake';
+          const key =
+            (this.zm ? ZOMBIE_ITEM_OVERRIDES[id]?.[idx] : undefined) ?? room.items[idx % room.items.length] ?? 'cake';
           const sprite = this.add.image(c * T, r * T, `item_${key}`).setOrigin(0).setDepth(2);
           this.items.push({ idx, key, x: c * T, y: r * T, sprite });
         } else if (ch === 'P') {
@@ -335,8 +394,12 @@ export class GameScene extends Phaser.Scene {
           const spec = room.npcs[npcIdx++];
           if (!spec || spec.id === this.hero.id) continue; // you can't meet yourself
           const def = charById(spec.id);
+          if (this.zm && !this.cured.has(def.id)) {
+            this.spawnZombie(def, c * T, (r + 1) * T);
+            continue;
+          }
           const sprite = this.add.image(c * T + 4, (r + 1) * T, `${def.id}_idle`).setOrigin(0.5, 1).setDepth(3);
-          const custom = spec.byHero?.[this.hero.id];
+          const custom = this.zm ? CURED_LINES[def.id] : spec.byHero?.[this.hero.id];
           const lines = custom ?? spec.lines;
           this.npcs.push({ def, x: c * T + 4, y: (r + 1) * T, sprite, lines, pose: spec.pose, custom: !!custom });
         } else if (ch === 'C') {
@@ -908,6 +971,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.clock += MINUTES_PER_FRAME;
+    if (this.zm && this.clock >= ZOMBIE_DAWN) {
+      this.zombieDawn();
+      return;
+    }
     if (this.clock >= 24 * 60 && this.mode === 'classic') {
       this.endGame(['MIDNIGHT!', 'THE PARTY FIZZLED OUT.', '', `PRESS ${keyName('jump')}`]);
       return;
@@ -916,6 +983,7 @@ export class GameScene extends Phaser.Scene {
     this.wt += this.worldSpeed();
     this.stepAbilityTimers();
     this.stepGuardians();
+    this.stepZombies();
     this.stepParticles();
 
     if (this.dying > 0) {
@@ -947,7 +1015,10 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    if (input.takeAbility()) this.useAbility();
+    if (input.takeAbility()) {
+      if (this.bitten > 0) this.say('ZOMBIES CANNOT DO THAT... BRAAAINS', 80);
+      else this.useAbility();
+    }
     if (input.takeMap()) {
       this.state = 'map';
       input.clearLatches();
@@ -966,7 +1037,13 @@ export class GameScene extends Phaser.Scene {
         return;
       }
     }
-    const walk = this.abId === 'panic' && this.abT > 0 ? WALK * 1.9 : WALK;
+    let walk = this.abId === 'panic' && this.abT > 0 ? WALK * 1.9 : WALK;
+    if (this.bitten > 0) {
+      walk *= 0.6;
+      this.bitten--;
+      if (this.nearStaticLight(this.px + PW / 2, this.py + 12)) this.bitten = Math.max(0, this.bitten - 12);
+      if (this.bitten === 0) this.say('PHEW! HUMAN AGAIN', 100);
+    }
 
     // support under feet (from last frame's position)
     const supports = this.supportTiles();
@@ -1007,6 +1084,14 @@ export class GameScene extends Phaser.Scene {
       this.buffer = 0;
       sfx.chord();
       this.burst(this.px + PW / 2, this.py + PH, PAL.yellow, 'note', 4);
+      for (const z of this.zombies) {
+        if (z.state !== 'hidden' && Math.hypot(z.x + 4 - this.px - PW / 2, z.y - this.py - PH) < 44) {
+          z.state = 'still';
+          z.why = 'stun';
+          z.t = 120;
+          z.x += (z.x < this.px ? -6 : 6);
+        }
+      }
     }
 
     this.vy = Math.min(this.vy + GRAV, MAX_FALL);
@@ -1171,7 +1256,7 @@ export class GameScene extends Phaser.Scene {
     this.dying = 45;
     this.vx = this.vy = 0;
     sfx.die();
-    if (navigator.vibrate) navigator.vibrate(40);
+    if (navigator.vibrate && navigator.userActivation?.hasBeenActive) navigator.vibrate(40);
   }
 
   private respawn() {
@@ -1310,6 +1395,8 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    if (this.zombieContact()) return;
+
     // hazard tiles
     if (this.tileSafe > 0) return;
     const c0 = Math.floor(bx / T);
@@ -1363,6 +1450,14 @@ export class GameScene extends Phaser.Scene {
     this.items = this.items.filter((i) => i !== it);
     sfx.collect();
     this.burst(it.x + 4, it.y + 4, PAL.yellow, 'dot', 6);
+    if (it.key === 'torch') this.hasTorch = true;
+    if (this.zm) {
+      const forWho = CHARACTERS.find((c) => CURES[c.id] === it.key && !this.cured.has(c.id) && c.id !== this.hero.id);
+      if (forWho) {
+        this.held.add(it.key);
+        this.say(`GOT THE ${it.key.toUpperCase()}! FOR ${forWho.name.toUpperCase()}`, 150);
+      } else if (it.key === 'torch') this.say('A TORCH! YOU CAN SEE FURTHER', 140);
+    }
     if (it.key === 'lighter') {
       this.hasLighter = true;
       this.say(this.hero.id === 'maffa' ? 'YOUR LIGHTER! NOW TO THE FIRE PIT' : "MAFFA'S LIGHTER! NOW: THE FIRE PIT");
@@ -1375,6 +1470,297 @@ export class GameScene extends Phaser.Scene {
       this.say('ALL PARTY BITS FOUND! TO THE FIRE PIT!', 200);
     }
     this.save();
+  }
+
+
+  // ------------------------------------------------------------------ zombie night
+  private spawnZombie(def: CharDef, x: number, feet: number) {
+    const key = this.textures.exists(`${def.id}_z_idle`) ? `${def.id}_z_idle` : `${def.id}_idle`;
+    const sprite = this.add.image(0, 0, key).setOrigin(0.5, 1).setDepth(4);
+    const cure = CURES[def.id];
+    const bubble = this.add.image(0, 0, this.textures.exists('want_bubble') ? 'want_bubble' : 'bubble').setOrigin(0.5, 1).setDepth(6.5);
+    const want = this.add.image(0, 0, `item_${cure}`).setOrigin(0.5, 0.5).setDepth(6.6);
+    this.zombies.push({
+      def,
+      x,
+      y: feet,
+      dir: Math.random() < 0.5 ? -1 : 1,
+      speed: 0.35 + Math.random() * 0.1,
+      state: 'walk',
+      t: 0,
+      why: '',
+      phase: Math.random() * 10,
+      sprite,
+      bubble,
+      want,
+    });
+  }
+
+  /** Static light sources in the room: fire, the coffee machine, the fire pit. */
+  private staticLights(): { x: number; y: number; r: number }[] {
+    const out: { x: number; y: number; r: number }[] = [];
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const ch = this.tiles[r][c];
+        if (ch === 'F') out.push({ x: c * T + 4, y: r * T + 4, r: 44 });
+        else if (ch === '~') out.push({ x: c * T + 4, y: r * T - 4, r: 34 });
+        else if (ch === 'O') out.push({ x: c * T + 4, y: r * T, r: 38 });
+      }
+    }
+    return out;
+  }
+
+  private nearStaticLight(x: number, y: number, scale = 0.75) {
+    return this.staticLights().some((l) => Math.hypot(l.x - x, l.y - y) < l.r * scale);
+  }
+
+  private stepZombies() {
+    if (!this.zm || !this.zombies.length) return;
+    if (this.tidyCd > 0) this.tidyCd--;
+    const ws = this.worldSpeed();
+    const dancing = this.abId === 'keyboard' && this.abT > 0;
+    const pcx = this.px + PW / 2;
+    const pfeet = this.py + PH;
+    const playerSafe = this.lying || this.dying > 0 || this.nearStaticLight(pcx, pfeet - 10);
+    let nearest = Infinity;
+    for (const z of this.zombies) {
+      z.phase += 0.08 * ws;
+      if (z.state === 'hidden') {
+        if (--z.t <= 0) z.state = 'walk';
+        continue;
+      }
+      const zcx = z.x + 4;
+      const dist = Math.hypot(zcx - pcx, z.y - pfeet);
+      nearest = Math.min(nearest, dist);
+      if (dancing) {
+        z.state = 'still';
+        z.why = 'dance';
+        z.t = Math.max(z.t, 2);
+      }
+      if (z.state === 'still') {
+        if ((z.t -= ws) <= 0) z.state = 'walk';
+        continue;
+      }
+      // Jonny's pint stops them
+      if (this.pint && Math.abs(zcx - this.pint.x) < 6 && Math.abs(z.y - this.pint.y) < 12) {
+        z.state = 'still';
+        z.why = 'drink';
+        z.t = 200;
+        this.pint = null;
+        this.say(`${z.def.name.toUpperCase()} STOPS FOR A PINT`, 100);
+        continue;
+      }
+      // choose a target: the laser dot, the player, or just shamble about
+      const sameLevel = Math.abs(z.y - pfeet) < 26;
+      const settled = this.frame - this.roomT > 100;
+      const chasing = settled && !playerSafe && this.bitten === 0 && sameLevel && Math.abs(zcx - pcx) < 104;
+      if (this.laser && Math.abs(z.y - this.laser.y) < 30) {
+        z.dir = this.laser.x > zcx ? 1 : -1;
+        z.state = 'chase';
+      } else if (chasing) {
+        z.dir = pcx > zcx ? 1 : -1;
+        if (z.state !== 'chase' && Math.random() < 0.5) zsfx('groan');
+        z.state = 'chase';
+      } else z.state = 'walk';
+      const sp = (z.state === 'chase' ? z.speed * 1.6 : z.speed) * ws;
+      const nx = z.x + z.dir * sp;
+      const lead = z.dir > 0 ? nx + 7 : nx;
+      const col = Math.floor(lead / T);
+      const feetRow = Math.round(z.y / T);
+      const ground = isSupport(this.tile(col, feetRow)) || this.tile(col, feetRow) === 'S';
+      const blocked = [1, 2].some((k) => {
+        const ch = this.tile(col, feetRow - k);
+        return isSolid(ch) || ch === 'S'; // Beez's stuff makes a barricade
+      });
+      const lit = this.nearStaticLight(lead, z.y - 10, 0.9);
+      const offscreen = lead < 2 || lead > RW - 2;
+      if (!ground || blocked || lit || offscreen) {
+        if (z.state !== 'chase' || this.laser) z.dir *= -1; // turn round (a chasing zombie waits at the edge)
+      } else z.x = nx;
+    }
+    // heartbeat when one is close
+    if (nearest < 96 && !this.lying) {
+      if (--this.beatT <= 0) {
+        zsfx('heartbeat', 1 - nearest / 96);
+        this.beatT = 22 + Math.floor(nearest / 2);
+      }
+    }
+    // Binks warns Tom and Luke
+    if (this.pal && nearest < 70 && this.frame % 150 === 0) {
+      this.pal.woof = 40;
+      sfx.bark();
+    }
+  }
+
+  /** Touching a zombie: cure it if you can, otherwise it bites. Returns true if handled. */
+  private zombieContact(): boolean {
+    if (!this.zm) return false;
+    const bx = this.px + 1;
+    const by = this.py + 2;
+    for (const z of this.zombies) {
+      if (z.state === 'hidden') continue;
+      const hit = bx < z.x + 7 && bx + PW - 2 > z.x + 1 && by < z.y && by + PH - 3 > z.y - 20;
+      if (!hit) continue;
+      const cure = CURES[z.def.id];
+      if (this.held.has(cure)) {
+        this.held.delete(cure);
+        this.cureZombie(z, `${cure.toUpperCase()}! ${z.def.name.toUpperCase()} IS CURED!`);
+        return true;
+      }
+      if (this.abId === 'tacos' && this.shield) {
+        this.shield = false;
+        this.shieldCd = this.ab.cooldown;
+        this.cureZombie(z, `KARLA'S TACOS CURE ${z.def.name.toUpperCase()}!`);
+        return true;
+      }
+      if (this.abId === 'tidy' && this.tidyCd === 0) {
+        z.state = 'hidden';
+        z.t = 1200;
+        this.tidyCd = 1800;
+        this.say(`DEBRA TIDIES ${z.def.name.toUpperCase()} INTO A CUPBOARD`, 140);
+        sfx.select();
+        return true;
+      }
+      if (this.lying || z.state === 'still' || this.invuln > 0 || this.knock > 0) continue;
+      if (this.frame - this.roomT < 80) continue; // grace period on entering a room
+      // bitten!
+      zsfx('bite');
+      this.bites++;
+      const side = this.px + PW / 2 < z.x + 4 ? -1 : 1;
+      this.knock = 20;
+      this.vx = side * 2.2;
+      this.vy = -2.4;
+      this.grounded = false;
+      this.invuln = 90;
+      if (this.bitten === 0) {
+        this.bitten = 600;
+        zsfx('zombified');
+        this.say('BRAAAINS... (FIND A LIGHT TO RECOVER)', 160);
+      }
+      z.state = 'still';
+      z.why = 'chew';
+      z.t = 60;
+      return true;
+    }
+    return false;
+  }
+
+  private cureZombie(z: Zombie, msg: string) {
+    this.cured.add(z.def.id);
+    this.talked.add(z.def.id); // they'll come to the fire
+    zsfx('cure');
+    this.burst(z.x + 4, z.y - 12, PAL.yellow, 'dot', 14);
+    this.burst(z.x + 4, z.y - 12, PAL.lime, 'note', 4);
+    this.say(msg, 160);
+    const sprite = this.add.image(z.x + 4, z.y, `${z.def.id}_idle`).setOrigin(0.5, 1).setDepth(3);
+    this.npcs.push({ def: z.def, x: z.x + 4, y: z.y, sprite, lines: CURED_LINES[z.def.id] ?? ['Thanks!'], custom: true });
+    z.sprite.destroy();
+    z.bubble.destroy();
+    z.want.destroy();
+    this.zombies = this.zombies.filter((q) => q !== z);
+    this.save();
+  }
+
+  private zombieDawn() {
+    const n = this.cured.size;
+    const total = CHARACTERS.length - 1;
+    const title = n >= total ? 'EVERYONE SAVED!' : n >= 6 ? 'DAWN BREAKS' : 'MORNING, AT LAST';
+    clearSave();
+    this.state = 'won';
+    this.overText = [
+      title,
+      '',
+      'THE SUN RISES OVER THE HOWGILLS.',
+      n < total ? 'THE LAST ZOMBIES SHUFFLE INTO THE FOG...' : 'NOT A ZOMBIE IN SIGHT. BREAKFAST!',
+      '',
+      `CURED ${n}/${total}   ITEMS ${this.collected.size}/${TOTAL_ITEMS}`,
+      `BITES ${this.bites}`,
+      '',
+      `PRESS ${keyName('jump')}`,
+    ];
+    this.frame = 0;
+    playMusic('dawn');
+    zsfx('dawn');
+    input.clearLatches();
+  }
+
+  /** Roll a cure-item key for an item slot, honouring zombie-mode overrides. */
+  private itemKeyAt(roomId: string, idx: number) {
+    const r = ROOMS[roomId];
+    return (this.zm ? ZOMBIE_ITEM_OVERRIDES[roomId]?.[idx] : undefined) ?? r.items[idx % r.items.length];
+  }
+
+  /** Becca in zombie mode: point at a zombie you can cure, or towards a cure you still need. */
+  private zombieHint(): boolean {
+    const pcx = this.px + PW / 2;
+    const curable = this.zombies.filter((z) => this.held.has(CURES[z.def.id]));
+    if (curable.length) {
+      const z = curable.sort((a, b) => Math.abs(a.x - pcx) - Math.abs(b.x - pcx))[0];
+      this.hint = { x: z.x + 4, y: z.y - 12, label: `CURE ${z.def.name.toUpperCase()}` };
+      return true;
+    }
+    const needed = new Set(
+      CHARACTERS.filter((c) => c.id !== this.hero.id && !this.cured.has(c.id)).map((c) => CURES[c.id]).filter((k) => !this.held.has(k)),
+    );
+    const here = this.items.find((it) => needed.has(it.key));
+    if (here) {
+      this.hint = { x: here.x + 4, y: here.y + 4, label: here.key.toUpperCase() };
+      return true;
+    }
+    const roomHasNeeded = (id: string) => {
+      const n = ROOMS[id].map.join('').split('*').length - 1;
+      for (let i = 0; i < n; i++) if (!this.collected.has(`${id}:${i}`) && needed.has(this.itemKeyAt(id, i))) return true;
+      return false;
+    };
+    const seen = new Set([this.room.id]);
+    const queue: { id: string; first: string }[] = [];
+    for (const [dir, id] of Object.entries(this.room.exits)) if (id && ROOMS[id]) queue.push({ id, first: dir });
+    while (queue.length) {
+      const q = queue.shift()!;
+      if (seen.has(q.id)) continue;
+      seen.add(q.id);
+      if (roomHasNeeded(q.id)) {
+        const cy = this.py + PH / 2;
+        const pos: Record<string, [number, number]> = { left: [6, cy], right: [RW - 6, cy], up: [RW / 2, 6], down: [RW / 2, RH - 6] };
+        const [x, y] = pos[q.first];
+        this.hint = { x, y, label: ROOMS[q.id].name.replace(/\s*\(.*\)/, '') };
+        return true;
+      }
+      for (const id of Object.values(ROOMS[q.id].exits)) if (id && ROOMS[id] && !seen.has(id)) queue.push({ id, first: q.first });
+    }
+    return false;
+  }
+
+  /** Chunky 8x8 lighting: dark everywhere except around you and the room's lights. */
+  private drawDarkness() {
+    const g = this.dark;
+    g.clear();
+    if (!this.zm || this.state === 'map') return;
+    const outdoor = this.room.theme.motifKind === 'sky';
+    const maxA = outdoor ? 0.6 : 0.86;
+    const flick = Math.sin(this.frame * 0.2) * 2;
+    const lights = this.staticLights();
+    const pr = (this.hasTorch ? 72 : 46) * (this.bitten > 0 ? 0.75 : 1) + flick;
+    lights.push({ x: this.px + PW / 2, y: this.py + 10, r: pr });
+    if (this.finale) for (const l of lights) l.r *= 2.2;
+    for (const n of this.npcs) lights.push({ x: n.x, y: n.y - 10, r: 22 }); // cured friends glow a little
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const cx = c * T + 4;
+        const cy = r * T + 4;
+        let a = 1;
+        for (const l of lights) {
+          const d = Math.hypot(cx - l.x, cy - l.y);
+          const k = Phaser.Math.Clamp((d - l.r * 0.55) / (l.r * 0.45), 0, 1);
+          if (k < a) a = k;
+          if (a === 0) break;
+        }
+        if (a <= 0) continue;
+        const q = Math.ceil(a * 3) / 3; // three chunky retro steps
+        g.fillStyle(0x060a14, q * maxA);
+        g.fillRect(c * T, r * T, T, T);
+      }
+    }
   }
 
   // ------------------------------------------------------------------ finale
@@ -1398,8 +1784,13 @@ export class GameScene extends Phaser.Scene {
     this.lying = false;
     this.laser = this.pint = this.hint = null;
     this.toast = null;
-    playMusic('victory');
+    playMusic(this.zm ? 'dawn' : 'victory');
     sfx.win();
+    for (const z of this.zombies) {
+      z.sprite.setVisible(false);
+      z.bubble.setVisible(false);
+      z.want.setVisible(false);
+    }
     for (const g of this.guardians) g.sprite.setVisible(g.def.kind === 'binks');
     for (const n of this.npcs) n.sprite.setVisible(false);
 
@@ -1452,7 +1843,24 @@ export class GameScene extends Phaser.Scene {
       title = 'A QUIET NIGHT';
       lines = ['JUST YOU, THE FIRE AND THE STARS.', 'TALK TO YOUR FRIENDS SO THEY COME TOO!'];
     }
-    lines.push('', `FRIENDS ${n}/${CHARACTERS.length - 1}   ITEMS ${this.collected.size}/${TOTAL_ITEMS}`, `LIT AT ${this.timeString()}   TUMBLES ${this.deaths}`);
+    if (this.zm) {
+      const total = CHARACTERS.length - 1;
+      if (n >= total) {
+        title = 'NOBODY LEFT BEHIND';
+        lines = ['EVERY ZOMBIE CURED. THE FIRE KEEPS THE', 'NIGHT AWAY, AND A SHOOTING STAR AGREES.'];
+        star = true;
+      } else if (n >= 6) {
+        title = 'THE FIRE HOLDS';
+        lines = ['HALF THE GANG SAVED, WARMING UP BY THE', 'FIRE. THE GROANS FADE INTO THE FOG.'];
+      } else if (n >= 1) {
+        title = 'A CLOSE SHAVE';
+        lines = ['A FEW FRIENDS SAVED.', 'CURE MORE ZOMBIES NEXT TIME!'];
+      } else {
+        title = 'SURVIVOR';
+        lines = ['JUST YOU AND THE FIRE.', 'BRING FRIENDS THEIR FAVOURITE THINGS!'];
+      }
+      lines.push('', `CURED ${n}/${total}   ITEMS ${this.collected.size}/${TOTAL_ITEMS}`, `LIT AT ${this.timeString()}   BITES ${this.bites}`);
+    } else lines.push('', `FRIENDS ${n}/${CHARACTERS.length - 1}   ITEMS ${this.collected.size}/${TOTAL_ITEMS}`, `LIT AT ${this.timeString()}   TUMBLES ${this.deaths}`);
     const lastArrive = friends.reduce((m, f) => Math.max(m, f.delay + Math.abs(f.tx + 12) / 1.4), 60);
     this.finale = { t: 0, fire, friends, title, lines, star, textAt: Math.min(lastArrive + 40, 900) };
     input.clearLatches();
@@ -1591,7 +1999,7 @@ export class GameScene extends Phaser.Scene {
         g.fillStyle(PAL.yellow, 1);
         g.fillRect(x + 5 + i * 4, y + ch - 9, 2, 2);
       }
-      const unmet = r.npcs.filter((n) => n.id !== this.hero.id && !this.talked.has(n.id)).length;
+      const unmet = r.npcs.filter((n) => n.id !== this.hero.id && !(this.zm ? this.cured : this.talked).has(n.id)).length;
       for (let i = 0; i < unmet; i++) {
         g.fillStyle(PAL.lime, 1);
         g.fillRect(x + cw - 8 - i * 4, y + ch - 9, 2, 2);
@@ -1603,7 +2011,11 @@ export class GameScene extends Phaser.Scene {
     }
     const friends = CHARACTERS.length - 1;
     drawText(g, `* ITEMS ${this.collected.size}/${TOTAL_ITEMS}`, 4, RH - 18, PAL.yellow);
-    drawText(g, `* FRIENDS MET ${[...this.talked].filter((t) => t !== this.hero.id).length}/${friends}`, 100, RH - 18, PAL.lime);
+    if (this.zm) {
+      drawText(g, `* ZOMBIES CURED ${this.cured.size}/${friends}`, 100, RH - 18, PAL.lime);
+      const held = [...this.held];
+      if (held.length) drawText(g, `CARRYING: ${held.join(', ').toUpperCase()}`.slice(0, 41), 4, RH - 27, PAL.white);
+    } else drawText(g, `* FRIENDS MET ${[...this.talked].filter((t) => t !== this.hero.id).length}/${friends}`, 100, RH - 18, PAL.lime);
     drawText(g, this.hasLighter ? 'LIGHTER: FOUND!' : 'LIGHTER: MISSING', 4, RH - 9, this.hasLighter ? PAL.orange : PAL.red);
     if (Math.floor(this.frame / 30) % 2) {
       const closeTxt = `${keyName('map')} TO CLOSE`;
@@ -1705,10 +2117,25 @@ export class GameScene extends Phaser.Scene {
         sfx.select();
         break;
       case 'quiz':
-        ok = this.makeHint();
+        ok = this.zm ? this.zombieHint() : this.makeHint();
         this.say(ok ? 'I KNOW THIS ONE!' : 'NOTHING LEFT TO FIND!', 90);
         break;
       case 'fetch': {
+        if (this.zm) {
+          // Tom: a speech so moving that nearby zombies stop to listen
+          let n = 0;
+          for (const z of this.zombies) {
+            if (z.state !== 'hidden' && Math.hypot(z.x - this.px, z.y - this.py - PH) < 110) {
+              z.state = 'still';
+              z.why = 'speech';
+              z.t = 260;
+              n++;
+            }
+          }
+          this.say(n ? 'CAN I JUST SAY A FEW WORDS...' : 'NOBODY TO GIVE A SPEECH TO', 120);
+          sfx.chord();
+          break;
+        }
         const it = this.nearestItem();
         if (!it || !this.pal) {
           this.say('BINKS: NOTHING HERE!', 90);
@@ -2026,6 +2453,28 @@ export class GameScene extends Phaser.Scene {
       it.sprite.setAlpha(this.frame % 40 < 4 ? 0.6 : 1);
     }
 
+    // zombies shamble, with a thought bubble showing the cure they want
+    for (const z of this.zombies) {
+      const hidden = z.state === 'hidden' || this.state === 'finale';
+      z.sprite.setVisible(!hidden);
+      z.bubble.setVisible(!hidden);
+      z.want.setVisible(!hidden);
+      if (hidden) continue;
+      const base = this.textures.exists(`${z.def.id}_z_idle`) ? `${z.def.id}_z_` : `${z.def.id}_`;
+      const moving = z.state === 'walk' || z.state === 'chase';
+      const f = z.why === 'dance' && z.state === 'still' ? (Math.floor(this.frame / 10) % 2 ? 'run1' : 'jump') : moving ? (Math.floor(z.phase * 1.5) % 2 ? 'run1' : 'run2') : 'idle';
+      const sway = moving ? Math.round(Math.sin(z.phase * 2)) : 0;
+      z.sprite
+        .setTexture(base + f)
+        .setPosition(Math.round(z.x + 4 + sway), Math.round(z.y))
+        .setFlipX(z.dir < 0)
+        .setAngle(z.why === 'dance' && z.state === 'still' ? Math.sin(this.frame * 0.3) * 12 : 0);
+      const bob = Math.round(Math.sin(this.frame * 0.06 + z.phase) * 1.5);
+      z.bubble.setPosition(Math.round(z.x + 4), Math.round(z.y - 25 + bob));
+      const bh = z.bubble.height;
+      z.want.setPosition(Math.round(z.x + 4), Math.round(z.y - 25 - bh / 2 - 1 + bob));
+    }
+
     // NPCs face the player (Luke is having a lie down)
     for (const n of this.npcs) {
       if (n.pose === 'lying') n.sprite.setAngle(-90).setY(n.y - 8).setFlipX(false);
@@ -2033,6 +2482,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.drawDynamic();
+    this.drawDarkness();
     this.drawFx();
     this.drawHud();
     this.drawUi();
@@ -2150,6 +2600,25 @@ export class GameScene extends Phaser.Scene {
   private drawFx() {
     const g = this.fx;
     g.clear();
+    if (this.zm) {
+      // low creeping fog and a sickly green moonlight
+      g.fillStyle(0x4aff8a, 0.035);
+      g.fillRect(0, 0, RW, RH);
+      for (let i = 0; i < 6; i++) {
+        const w = 70 + (i % 3) * 20;
+        const x = ((i * 61 + this.frame * (0.12 + (i % 3) * 0.05)) % (RW + w * 2)) - w;
+        g.fillStyle(0xb0c8c0, 0.07);
+        g.fillEllipse(x, RH - 10 - (i % 2) * 8, w, 12);
+      }
+      for (const z of this.zombies) {
+        if (z.state === 'still' && z.why) {
+          const label = { dance: '♪', drink: 'GLUG', speech: '...', stun: '!?', chew: 'CHOMP' }[z.why] ?? '';
+          if (label && label !== '♪') drawTextCentered(g, label, z.x + 4, z.y - 46, PAL.lime, PAL.ink);
+          if (z.why === 'dance') this.parts.length < 80 && this.frame % 20 === 0 && this.burst(z.x + 4, z.y - 22, PAL.lime, 'note', 1);
+        }
+      }
+      if (this.bitten > 0) drawTextCentered(g, 'BRAAAINS', this.px + PW / 2, this.py - 12, PAL.lime, PAL.ink);
+    }
     // Beth: the world goes slow and dreamy
     if (this.abId === 'late' && this.abT > 0) {
       g.fillStyle(PAL.navy, 0.18);
@@ -2298,7 +2767,7 @@ export class GameScene extends Phaser.Scene {
   private drawHud() {
     const time = this.timeString();
     const meter = this.abilityMeter();
-    const key = `${this.room.id}|${this.collected.size}|${time}|${this.lives}|${Math.floor(meter * 12)}|${this.hasLighter}`;
+    const key = `${this.room.id}|${this.collected.size}|${time}|${this.lives}|${Math.floor(meter * 12)}|${this.hasLighter}|${this.cured.size}|${this.bitten > 0}`;
     if (key === this.hudKey) return;
     this.hudKey = key;
     const g = this.hud;
@@ -2326,7 +2795,8 @@ export class GameScene extends Phaser.Scene {
       g.fillStyle(PAL.ink, 1);
       g.fillRect(0, RH + 8, RW, 8);
     }
-    drawText(g, `ITEMS ${String(this.collected.size).padStart(2, '0')}/${TOTAL_ITEMS}`, 2, RH + 9, PAL.yellow);
+    if (this.zm) drawText(g, `CURED ${String(this.cured.size).padStart(2, '0')}/${CHARACTERS.length - 1}`, 2, RH + 9, PAL.lime);
+    else drawText(g, `ITEMS ${String(this.collected.size).padStart(2, '0')}/${TOTAL_ITEMS}`, 2, RH + 9, PAL.yellow);
     drawTextCentered(g, time, RW / 2 + 24, RH + 9, PAL.white);
     // ability meter: full and bright when ready
     g.fillStyle(PAL.slate, 1);
@@ -2343,6 +2813,8 @@ export class GameScene extends Phaser.Scene {
     }
     if (this.mode === 'classic') {
       drawText(g, '@'.repeat(Math.max(0, this.lives)), RW - 2 - this.lives * 6, RH + 9, PAL.red);
+    } else if (this.zm) {
+      drawText(g, 'ZOMBIE', RW - 38, RH + 9, this.bitten > 0 ? PAL.red : PAL.lime);
     } else {
       drawText(g, 'COSY', RW - 26, RH + 9, PAL.lime);
     }

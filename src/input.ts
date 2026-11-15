@@ -177,7 +177,7 @@ class Input {
       jump.setPointerCapture(e.pointerId);
       jump.classList.add('on');
       this.pressJump();
-      if (navigator.vibrate) navigator.vibrate(8);
+      if (navigator.vibrate && navigator.userActivation?.hasBeenActive) navigator.vibrate(8);
     });
     const jumpUp = () => {
       jump.classList.remove('on');

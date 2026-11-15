@@ -167,6 +167,22 @@ export const PATCH: Record<string, FMPatch> = {
     env: { a: 0.002, d: 0.12, s: 0, r: 0.05 },
     vol: 0.16,
   },
+  // hollow reed for the zombie tunes: odd harmonics, a little nasal
+  reed: {
+    mods: [
+      { ratio: 1, index: 1.9, decay: 0.2, floor: 0.5 },
+      { ratio: 3, index: 0.7, decay: 0.12, floor: 0.2 },
+    ],
+    env: { a: 0.02, d: 0.18, s: 0.6, r: 0.12 },
+    vol: 0.17,
+  },
+  // eerie ghost voice: slow swell, detuned pair
+  ghost: {
+    mods: [{ ratio: 1, index: 0.7, decay: 0.6, floor: 0.5, attack: 0.15 }],
+    env: { a: 0.12, d: 0.6, s: 0.6, r: 0.6 },
+    vol: 0.17,
+    unison: 14,
+  },
   // sfx voices
   bwoop: {
     mods: [{ ratio: 1, index: 1.6, decay: 0.12, floor: 0.2 }],
@@ -188,6 +204,33 @@ export const PATCH: Record<string, FMPatch> = {
     glide: 0.1,
   },
 };
+
+/** Soft swelling gust of wind (bandpassed noise whose centre drifts); cleans itself up. */
+export function windGust(c: AudioContext, out: AudioNode, t: number, dur: number, vol: number, fq = 700) {
+  const src = c.createBufferSource();
+  src.buffer = noiseBuf(c);
+  src.loop = true;
+  const f = c.createBiquadFilter();
+  f.type = 'bandpass';
+  f.Q.value = 1.4;
+  f.frequency.setValueAtTime(fq * 0.6, t);
+  f.frequency.linearRampToValueAtTime(fq * 1.3, t + dur * 0.5);
+  f.frequency.linearRampToValueAtTime(fq * 0.7, t + dur);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(vol, t + dur * 0.45);
+  g.gain.linearRampToValueAtTime(0.0001, t + dur);
+  src.connect(f);
+  f.connect(g);
+  g.connect(out);
+  src.start(t, Math.random() * 0.5);
+  src.stop(t + dur + 0.05);
+  src.onended = () => {
+    src.disconnect();
+    f.disconnect();
+    g.disconnect();
+  };
+}
 
 const noiseBufs = new WeakMap<AudioContext, AudioBuffer>();
 function noiseBuf(ctx: AudioContext) {
@@ -319,6 +362,69 @@ export const fmHat = (ctx: AudioContext, out: AudioNode, t: number, vel = 1, ope
 export const fmTom = (ctx: AudioContext, out: AudioNode, t: number, f = 180, vel = 1) =>
   pitched(ctx, out, 'sine', t, f, f * 0.5, 0.18, 0.4 * vel, 0.07, 0.5);
 
+// A single oscillator voice with optional vibrato (LFO) and a parallel bank of
+// bandpass formant filters (for vowel-ish sounds). Cleans up after itself.
+interface VoiceOpts {
+  type: OscillatorType;
+  t: number;
+  dur: number;
+  f0: number;
+  f1?: number;
+  vol: number;
+  atk?: number;
+  rel?: number;
+  vib?: [number, number]; // rate Hz, depth Hz
+  formants?: [number, number, number][]; // bandpass from Hz, to Hz, gain
+}
+function voice(c: AudioContext, out: AudioNode, v: VoiceOpts) {
+  const end = v.t + v.dur;
+  const nodes: AudioNode[] = [];
+  const o = c.createOscillator();
+  o.type = v.type;
+  o.frequency.setValueAtTime(v.f0, v.t);
+  if (v.f1 && v.f1 !== v.f0) o.frequency.exponentialRampToValueAtTime(v.f1, end);
+  const g = c.createGain();
+  const atk = v.atk ?? 0.01;
+  const rel = Math.min(v.rel ?? 0.1, v.dur * 0.5);
+  g.gain.setValueAtTime(0.0001, v.t);
+  g.gain.linearRampToValueAtTime(v.vol, v.t + atk);
+  g.gain.setValueAtTime(v.vol, Math.max(v.t + atk, end - rel));
+  g.gain.linearRampToValueAtTime(0.0001, end);
+  nodes.push(o, g);
+  if (v.formants) {
+    for (const [a, b, gn] of v.formants) {
+      const f = c.createBiquadFilter();
+      f.type = 'bandpass';
+      f.Q.value = 5;
+      f.frequency.setValueAtTime(a, v.t);
+      f.frequency.exponentialRampToValueAtTime(b, end);
+      const fg = c.createGain();
+      fg.gain.value = gn;
+      o.connect(f);
+      f.connect(fg);
+      fg.connect(g);
+      nodes.push(f, fg);
+    }
+  } else o.connect(g);
+  g.connect(out);
+  if (v.vib) {
+    const l = c.createOscillator();
+    const lg = c.createGain();
+    l.frequency.value = v.vib[0];
+    lg.gain.value = v.vib[1];
+    l.connect(lg);
+    lg.connect(o.frequency);
+    l.start(v.t);
+    l.stop(end + 0.05);
+    nodes.push(l, lg);
+  }
+  o.start(v.t);
+  o.stop(end + 0.05);
+  o.onended = () => {
+    for (const n of nodes) n.disconnect();
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 16-bit sound effects
 // ---------------------------------------------------------------------------
@@ -372,6 +478,58 @@ const sfx16: typeof sfx8 = {
     n16('brass', 600, 0, 0.6, 0.8, 150);
     n16('pad', 300, 0, 0.6, 1.5, 75);
   },
+  // comic zombie "braaains": saw through sliding vowel formants (uh -> aa -> ee), breathy start, final hiss
+  groan: () => {
+    if (muted || !ctx) return;
+    const t = ctx.currentTime;
+    voice(ctx, ctx.destination, { type: 'sawtooth', t, dur: 0.4, f0: 138, f1: 150, vol: 0.2, atk: 0.04, vib: [5, 3], formants: [[330, 720, 1], [850, 1150, 0.7]] });
+    voice(ctx, ctx.destination, { type: 'sawtooth', t: t + 0.36, dur: 0.85, f0: 150, f1: 84, vol: 0.2, atk: 0.05, rel: 0.3, vib: [6, 5], formants: [[720, 480, 1], [1150, 2100, 0.7]] });
+    noiseBurst(ctx, ctx.destination, t, 0.2, 0.05, 'bandpass', 700, 1.5);
+    noiseBurst(ctx, ctx.destination, t + 1.0, 0.2, 0.05, 'highpass', 5200);
+    n16('bass', 70, 0.02, 0.5, 0.45, 48);
+  },
+  heartbeat: (level = 0.5) => {
+    if (muted || !ctx) return;
+    const l = Math.max(0, Math.min(1, level));
+    const t = ctx.currentTime;
+    const v = 0.35 + 0.65 * l;
+    const gap = 0.2 - 0.08 * l;
+    pitched(ctx, ctx.destination, 'sine', t, 100, 46, 0.09, v * 0.7, 0.05, 0.35);
+    pitched(ctx, ctx.destination, 'sine', t + gap, 85 + 15 * l, 42, 0.08, v * 0.5, 0.045, 0.3);
+    if (l > 0.6) noiseBurst(ctx, ctx.destination, t, 0.05, 0.04 * l, 'lowpass', 300);
+  },
+  cure: () => {
+    [1047, 1319, 1568, 1976, 2349, 2637, 3136].forEach((f, i) => n16('bell', f, i * 0.07, 0.3, 0.55 + i * 0.05));
+    [262, 330, 392, 523].forEach((f) => n16('pad', f, 0, 1.0, 1.6));
+    n16('bell', 1047, 0.5, 0.5, 0.8);
+    n16('pluck', 3136, 0.55, 0.06, 0.5);
+    n16('pluck', 2637, 0.62, 0.06, 0.4);
+  },
+  bite: () => {
+    n16('woof', 210, 0, 0.07, 1, 90);
+    n16('woof', 190, 0.13, 0.07, 0.9, 80);
+    n16('bwoop', 170, 0.3, 0.1, 0.6, 320);
+    if (muted || !ctx) return;
+    const t = ctx.currentTime;
+    noiseBurst(ctx, ctx.destination, t, 0.06, 0.1, 'bandpass', 2400, 1.2);
+    noiseBurst(ctx, ctx.destination, t + 0.13, 0.06, 0.09, 'bandpass', 1900, 1.2);
+  },
+  zombified: () => {
+    n16('brass', 520, 0, 1.1, 1, 66);
+    n16('pad', 110, 0, 1.0, 1.5);
+    n16('pad', 131, 0, 1.0, 1.3);
+    if (muted || !ctx) return;
+    const t = ctx.currentTime;
+    voice(ctx, ctx.destination, { type: 'sine', t, dur: 1.2, f0: 420, f1: 55, vol: 0.14, vib: [9, 28], rel: 0.4 });
+    noiseBurst(ctx, ctx.destination, t + 0.5, 0.5, 0.05, 'lowpass', 500);
+  },
+  dawn: () => {
+    [523, 659, 784, 1047, 1319].forEach((f, i) => n16('brass', f, i * 0.11, 0.2, 0.8));
+    [262, 330, 392, 523].forEach((f) => n16('pad', f, 0, 1.4, 1.6));
+    [523, 659, 784, 1047].forEach((f) => n16('brass', f, 0.6, 0.7, 0.8));
+    n16('bell', 1568, 0.6, 0.6, 0.8);
+    n16('bell', 2093, 0.72, 0.6, 0.6);
+  },
   win: () => {
     [523, 659, 784, 1047].forEach((f, i) => n16('brass', f, i * 0.1, 0.14));
     [523, 659, 784, 1047].forEach((f) => n16('brass', f, 0.4, 0.5, 0.9));
@@ -393,6 +551,12 @@ export const sfx: typeof sfx8 = {
   chord: () => cur().chord(),
   slow: () => cur().slow(),
   win: () => cur().win(),
+  groan: () => cur().groan(),
+  heartbeat: (level?: number) => cur().heartbeat(level),
+  cure: () => cur().cure(),
+  bite: () => cur().bite(),
+  zombified: () => cur().zombified(),
+  dawn: () => cur().dawn(),
 };
 
 const sfx8 = {
@@ -420,5 +584,45 @@ const sfx8 = {
   slow: () => tone(600, 150, 0.6, 'triangle', 0.08),
   win: () => {
     [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.14, 'square', 0.06, i * 0.12));
+  },
+  // comic zombie groan: wobbly saw "brr" sliding down into a long "aaaains", with a hiss
+  groan: () => {
+    if (muted || !ctx) return;
+    const t = ctx.currentTime;
+    voice(ctx, ctx.destination, { type: 'sawtooth', t, dur: 0.3, f0: 150, f1: 125, vol: 0.05, vib: [10, 8] });
+    voice(ctx, ctx.destination, { type: 'square', t: t + 0.22, dur: 0.85, f0: 120, f1: 60, vol: 0.05, atk: 0.06, rel: 0.25, vib: [6, 6] });
+    noise(0.25, 0.03, 0, 500);
+    noise(0.2, 0.03, 1.0, 5000);
+  },
+  // one lub-dub; level 0..1 = louder and tighter
+  heartbeat: (level = 0.5) => {
+    const l = Math.max(0, Math.min(1, level));
+    const v = 0.09 + 0.13 * l;
+    const gap = 0.2 - 0.08 * l;
+    tone(90, 45, 0.1, 'triangle', v);
+    tone(80, 42, 0.09, 'triangle', v * 0.8, gap);
+  },
+  cure: () => {
+    [523, 659, 784, 1047, 1319, 1568, 2093].forEach((f, i) => tone(f, f, 0.1, 'square', 0.05, i * 0.09));
+    tone(1047, 1047, 0.45, 'triangle', 0.09, 0.6);
+    tone(1568, 1568, 0.35, 'square', 0.025, 0.65);
+  },
+  bite: () => {
+    tone(320, 110, 0.06, 'square', 0.08);
+    noise(0.05, 0.07, 0, 2500);
+    tone(300, 100, 0.06, 'square', 0.08, 0.13);
+    noise(0.05, 0.07, 0.13, 2500);
+  },
+  zombified: () => {
+    if (muted || !ctx) return;
+    const t = ctx.currentTime;
+    voice(ctx, ctx.destination, { type: 'sawtooth', t, dur: 1.2, f0: 600, f1: 60, vol: 0.06, vib: [11, 40], rel: 0.4 });
+    voice(ctx, ctx.destination, { type: 'square', t: t + 0.1, dur: 1.0, f0: 300, f1: 50, vol: 0.04, vib: [7, 15], rel: 0.4 });
+    noise(0.4, 0.04, 0.6, 400);
+  },
+  dawn: () => {
+    [262, 330, 392, 523, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.14, 'square', 0.055, i * 0.1));
+    [523, 659, 784].forEach((f) => tone(f, f, 0.6, 'triangle', 0.07, 0.75));
+    tone(1047, 1047, 0.6, 'square', 0.04, 0.75);
   },
 };

@@ -16,6 +16,7 @@ import type { RoomDef, SpriteDef } from '../rooms';
 export const ROOMS_UPSTAIRS: Record<string, RoomDef> = {
   landing: {
     id: 'landing',
+    music: 'lullaby',
     name: 'The Landing (Five More Minutes)',
     theme: {
       bg: 0x4a2c3d, motif: 0x62384e, motifKind: 'stripes', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
@@ -74,6 +75,7 @@ export const ROOMS_UPSTAIRS: Record<string, RoomDef> = {
 
   tomluke: {
     id: 'tomluke',
+    music: 'teaparty',
     name: "Tom & Luke's (Lie-Downs & Speeches)",
     theme: {
       bg: PAL.navy, motif: 0x34458a, motifKind: 'stripes', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
@@ -119,6 +121,7 @@ export const ROOMS_UPSTAIRS: Record<string, RoomDef> = {
 
   bathroom: {
     id: 'bathroom',
+    music: 'bubbles',
     name: 'The Family Bathroom (Roll-Top Hop)',
     theme: {
       bg: 0x2f8f9d, motif: 0x57b3bf, motifKind: 'tiles', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.white,
@@ -163,6 +166,7 @@ export const ROOMS_UPSTAIRS: Record<string, RoomDef> = {
 
   nickkarla: {
     id: 'nickkarla',
+    music: 'lullaby',
     name: "Nick & Karla's (Taco Tuesday)",
     theme: {
       bg: 0x8a3f2c, motif: 0xa5533a, motifKind: 'dots', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
@@ -208,6 +212,7 @@ export const ROOMS_UPSTAIRS: Record<string, RoomDef> = {
 
   attic: {
     id: 'attic',
+    music: 'attic',
     name: 'The Attic (Best Views In Cumbria)',
     theme: {
       bg: 0x1d2b53, motif: 0x3b5dc9, motifKind: 'sky', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,

@@ -11,6 +11,7 @@ import type { RoomDef, SpriteDef } from '../rooms';
 export const ROOMS_GROUND: Record<string, RoomDef> = {
   dining: {
     id: 'dining',
+    music: 'waltz',
     name: 'The Dining Room (Seats Sixteen)',
     theme: {
       bg: 0x4a1a2c, motif: 0x642338, motifKind: 'stripes', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
@@ -64,6 +65,7 @@ export const ROOMS_GROUND: Record<string, RoomDef> = {
 
   drawing: {
     id: 'drawing',
+    music: 'waltz',
     name: 'The Drawing Room (Bay Window)',
     theme: {
       bg: 0x2c3f68, motif: 0x3a5084, motifKind: 'stripes', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
@@ -115,6 +117,7 @@ export const ROOMS_GROUND: Record<string, RoomDef> = {
 
   pantry: {
     id: 'pantry',
+    music: 'bustle',
     name: 'The Pantry (Do Not Disturb The Cake)',
     theme: {
       bg: 0x3e2d22, motif: 0x54402f, motifKind: 'tiles', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
@@ -156,6 +159,7 @@ export const ROOMS_GROUND: Record<string, RoomDef> = {
 
   cellar: {
     id: 'cellar',
+    music: 'crypt',
     name: 'The Wine Cellar (Drip, Drip)',
     theme: {
       bg: 0x14152a, motif: 0x20223d, motifKind: 'stone', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
@@ -163,7 +167,6 @@ export const ROOMS_GROUND: Record<string, RoomDef> = {
     },
     exits: { up: 'pantry' },
     pos: { x: 0, y: 3 },
-    music: 'stairs',
     signs: [{ x: 28, y: 12, text: 'PANTRY ^' }],
     map: [
       '##########........##############',

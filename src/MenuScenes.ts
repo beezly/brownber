@@ -11,6 +11,9 @@ import { input, keyName } from './input';
 import { sfx } from './sound';
 import { playMusic } from './music';
 import { loadSave, type SaveData } from './save';
+
+type Mode = 'cosy' | 'classic' | 'zombie';
+const MODES: Mode[] = ['cosy', 'classic', 'zombie'];
 import { BUILD_ID } from './update';
 
 const W = 256;
@@ -37,7 +40,7 @@ let pendingRebake = false;
 export class TitleScene extends Phaser.Scene {
   private g!: Phaser.GameObjects.Graphics;
   private binks!: Phaser.GameObjects.Image;
-  private mode: 'cosy' | 'classic' = 'cosy';
+  private mode: Mode = 'cosy';
   private t = 0;
   private bx = -20;
 
@@ -47,7 +50,7 @@ export class TitleScene extends Phaser.Scene {
 
   create() {
     try {
-      this.mode = (localStorage.getItem('bb-mode') as 'cosy' | 'classic') || 'cosy';
+      this.mode = (localStorage.getItem('bb-mode') as Mode) || 'cosy';
     } catch {
       /* ignore */
     }
@@ -79,7 +82,7 @@ export class TitleScene extends Phaser.Scene {
   }
 
   private toggleMode() {
-    this.mode = this.mode === 'cosy' ? 'classic' : 'cosy';
+    this.mode = MODES[(MODES.indexOf(this.mode) + 1) % MODES.length];
     try {
       localStorage.setItem('bb-mode', this.mode);
     } catch {
@@ -266,10 +269,10 @@ export class TitleScene extends Phaser.Scene {
     if (is16()) drawTextRows(g, sLabel, W / 2, 140, [0xfff4c0, 0xffe080, 0xffc040, 0xf89830, 0xe86828, 0xc84020, 0x902818]);
     else drawTextCentered(g, sLabel, W / 2, 140, PAL.lgrey);
 
-    const m = this.mode === 'cosy' ? '< COSY: NO DEATHS >' : '< CLASSIC: 5 LIVES >';
+    const m = { cosy: '< COSY: NO DEATHS >', classic: '< CLASSIC: 5 LIVES >', zombie: '< ZOMBIE NIGHT! >' }[this.mode];
     g.fillStyle(PAL.ink, 0.7);
     g.fillRect(W / 2 - 64, 160, 128, 30);
-    drawTextCentered(g, m, W / 2, 163, this.mode === 'cosy' ? PAL.lime : PAL.orange);
+    drawTextCentered(g, m, W / 2, 163, { cosy: PAL.lime, classic: PAL.orange, zombie: 0x7cff6a }[this.mode]);
     if (this.save) {
       const name = charById(this.save.hero).name.toUpperCase();
       g.fillStyle(PAL.ink, 0.7);
@@ -293,7 +296,7 @@ export class TitleScene extends Phaser.Scene {
 export class SelectScene extends Phaser.Scene {
   private g!: Phaser.GameObjects.Graphics;
   private sel = 0;
-  private mode: 'cosy' | 'classic' = 'cosy';
+  private mode: Mode = 'cosy';
   private sprites: Phaser.GameObjects.Image[] = [];
   private portrait!: Phaser.GameObjects.Image;
   private t = 0;
@@ -302,7 +305,7 @@ export class SelectScene extends Phaser.Scene {
     super('select');
   }
 
-  init(data: { mode: 'cosy' | 'classic' }) {
+  init(data: { mode: Mode }) {
     this.mode = data.mode ?? 'cosy';
     try {
       const last = localStorage.getItem('bb-hero');

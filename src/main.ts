@@ -53,4 +53,4 @@ const game = new Phaser.Game({
 });
 
 // Dev-only hook for testing in the browser console.
-if (import.meta.env.DEV) (window as unknown as { __game: Phaser.Game }).__game = game;
+if (import.meta.env.DEV || location.search.includes('debug')) (window as unknown as { __game: Phaser.Game }).__game = game;

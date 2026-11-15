@@ -3,7 +3,7 @@
 export interface SaveData {
   v: 1;
   hero: string;
-  mode: 'cosy' | 'classic';
+  mode: 'cosy' | 'classic' | 'zombie';
   room: string;
   x: number;
   y: number;
@@ -14,6 +14,11 @@ export interface SaveData {
   lives: number;
   lighter: boolean;
   deaths: number;
+  // zombie night (optional so older saves still load)
+  cured?: string[];
+  held?: string[];
+  torch?: boolean;
+  bites?: number;
 }
 
 const KEY = 'bb-save';

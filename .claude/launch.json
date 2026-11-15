@@ -21,6 +21,20 @@
         "--strictPort"
       ],
       "port": 4173
+    },
+    {
+      "name": "zbuild",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "vite",
+        "preview",
+        "--outDir",
+        "/private/tmp/claude-501/-Users-andy-projects-brownber/9108160e-42bf-4b4a-991e-b1e97a74f4a4/scratchpad/zbuild",
+        "--port",
+        "4174",
+        "--strictPort"
+      ],
+      "port": 4174
     }
   ]
 }

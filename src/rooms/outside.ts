@@ -13,6 +13,7 @@ const FELLS = 0x0f1432; // the fells' silhouette
 export const ROOMS_OUTSIDE: Record<string, RoomDef> = {
   drive: {
     id: 'drive',
+    music: 'jaunty',
     name: 'The Drive & Cattle Grid (Doomed)',
     theme: {
       bg: SKY, motif: PAL.white, motifKind: 'sky', wall: PAL.grey, wallDark: FELLS, wallLight: PAL.lgrey,
@@ -20,7 +21,6 @@ export const ROOMS_OUTSIDE: Record<string, RoomDef> = {
     },
     exits: { left: 'porch', right: 'terrace' },
     pos: { x: 4, y: 3 },
-    music: 'teaparty',
     signs: [
       { x: 70, y: 40, text: 'CATTLE GRID' },
       { x: 52, y: 52, text: 'WRONG ROAD? DOOMED!' },
@@ -60,6 +60,7 @@ export const ROOMS_OUTSIDE: Record<string, RoomDef> = {
 
   terrace: {
     id: 'terrace',
+    music: 'jaunty',
     name: 'The South-facing Terrace',
     theme: {
       bg: SKY, motif: PAL.white, motifKind: 'sky', wall: PAL.grey, wallDark: FELLS, wallLight: PAL.lgrey,
@@ -67,7 +68,6 @@ export const ROOMS_OUTSIDE: Record<string, RoomDef> = {
     },
     exits: { left: 'drive', right: 'firepit' },
     pos: { x: 5, y: 3 },
-    music: 'teaparty',
     signs: [{ x: 96, y: 112, text: 'BBQ ->' }],
     map: [
       'DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD',
@@ -115,6 +115,7 @@ export const ROOMS_OUTSIDE: Record<string, RoomDef> = {
 
   firepit: {
     id: 'firepit',
+    music: 'night',
     name: 'The Fire Pit',
     theme: {
       bg: SKY, motif: PAL.white, motifKind: 'sky', wall: PAL.grey, wallDark: FELLS, wallLight: PAL.lgrey,
@@ -122,7 +123,6 @@ export const ROOMS_OUTSIDE: Record<string, RoomDef> = {
     },
     exits: { left: 'terrace', up: 'fells' },
     pos: { x: 6, y: 3 },
-    music: 'teaparty',
     signs: [{ x: 96, y: 44, text: 'TO THE FELLS ^' }],
     map: [
       'DDDDDDDDDDDDDDDDDDDDDD.........D',
@@ -171,6 +171,7 @@ export const ROOMS_OUTSIDE: Record<string, RoomDef> = {
 
   fells: {
     id: 'fells',
+    music: 'quest',
     name: 'Howgill Fells (Cautley Spout)',
     theme: {
       bg: SKY, motif: PAL.white, motifKind: 'sky', wall: PAL.grey, wallDark: FELLS, wallLight: PAL.lgrey,
@@ -178,7 +179,6 @@ export const ROOMS_OUTSIDE: Record<string, RoomDef> = {
     },
     exits: { down: 'firepit' },
     pos: { x: 6, y: 2 },
-    music: 'fells',
     signs: [{ x: 16, y: 18, text: 'CAUTLEY SPOUT' }],
     map: [
       'DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD',

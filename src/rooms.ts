@@ -80,6 +80,7 @@ export interface RoomDef {
 const BASE: Record<string, RoomDef> = {
   porch: {
     id: 'porch',
+    music: 'house',
     name: 'The Porch (Wipe Your Feet)',
     theme: {
       bg: PAL.navy, motif: 0x2f3d7a, motifKind: 'stripes', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
@@ -128,6 +129,7 @@ const BASE: Record<string, RoomDef> = {
 
   sitting: {
     id: 'sitting',
+    music: 'teaparty',
     name: 'The Sitting Room',
     theme: {
       bg: PAL.teal, motif: 0x2c8a6a, motifKind: 'leaf', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
@@ -180,6 +182,7 @@ const BASE: Record<string, RoomDef> = {
 
   kitchen: {
     id: 'kitchen',
+    music: 'bustle',
     name: 'The Kitchen (Mind The Hoover)',
     theme: {
       bg: PAL.lgrey, motif: 0xa9c2d2, motifKind: 'tiles', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.white,
@@ -232,6 +235,7 @@ const BASE: Record<string, RoomDef> = {
 
   stairs: {
     id: 'stairs',
+    music: 'stairs',
     name: 'The Grand Staircase',
     theme: {
       bg: PAL.plum, motif: 0x6e3270, motifKind: 'fleur', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
@@ -239,7 +243,6 @@ const BASE: Record<string, RoomDef> = {
     },
     exits: { left: 'sitting', right: 'drawing', up: 'landing' },
     pos: { x: 4, y: 2 },
-    music: 'stairs',
     signs: [{ x: 60, y: 14, text: 'UP TO THE LANDING' }],
     map: [
       '##....##########################',

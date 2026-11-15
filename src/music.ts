@@ -8,14 +8,17 @@
 //    recorded tracks map to FM tunes (teaparty/fells -> night, victory -> fanfare, stairs ->
 //    a faster house variant). Switching style restarts the current tune in the new style.
 
-import { fmHat, fmKick, fmNote, fmSnare, fmTom, getAudio, isMuted, PATCH } from './sound';
+import { fmHat, fmKick, fmNote, fmSnare, fmTom, getAudio, isMuted, noiseBurst, PATCH, windGust } from './sound';
 import { is16, onStyleChange } from './settings';
 
 interface Track {
   bpm: number;
   lead: string; // eighth notes, space separated: C5, F#4, '-' = hold, '.' = rest
   bass: string;
-  drums: string; // x = hat, o = kick-ish thump, . = rest (eighths)
+  drums: string; // x = hat, o = kick-ish thump, s = snare-ish noise, b = bubble blip, w = wind gust, . = rest (eighths)
+  bar?: number; // eighth notes per bar (default 8; 6 = waltz)
+  wave?: OscillatorType; // lead waveform (default square)
+  lv?: number; // lead volume (default 0.05)
 }
 
 const TRACKS: Record<string, Track> = {
@@ -81,6 +84,8 @@ interface Track16 {
   fill?: boolean; // tom fill on the last beat of the loop
   swing?: number; // 0..1 delay of off-sixteenths
   echo?: number; // lead delay send
+  bar?: number; // eighth notes per bar (default 8; 6 = waltz)
+  wind?: number; // wind-gust volume, one gust every other bar
 }
 
 const HOUSE_LEAD = TRACKS.house.lead;
@@ -184,7 +189,7 @@ const TRACKS16: Record<string, Track16> = {
 };
 
 /** 16-bit mode: which FM tune stands in for each requested track. */
-const MAP16: Record<string, string> = { teaparty: 'night', fells: 'night', victory: 'fanfare', stairs: 'stairs' };
+const MAP16: Record<string, string> = { teaparty: 'night', fells: 'quest', victory: 'fanfare', stairs: 'stairs' };
 /** 8-bit mode: the new FM-only names fall back to recorded tracks. */
 const MAP8: Record<string, string> = { night: 'fells', fanfare: 'victory' };
 
@@ -198,16 +203,16 @@ interface Chord {
   iv: number[];
 }
 function parseChord(sym: string): Chord {
-  const m = /^([A-G]#?)(m7|maj7|dim|m|7|)$/.exec(sym);
+  const m = /^([A-G][#b]?)(m7|maj7|dim|m|7|)$/.exec(sym);
   if (!m) return { pc: 0, iv: QUAL[''] };
   return { pc: NOTE[m[1]], iv: QUAL[m[2]] };
 }
 const mtof = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
 
-function deriveChords(bass: string[]): string[] {
+function deriveChords(bass: string[], bar = 8): string[] {
   const out: string[] = [];
-  for (let b = 0; b * 8 < bass.length; b++) {
-    const root = bass.slice(b * 8, b * 8 + 8).find((x) => x !== '-' && x !== '.');
+  for (let b = 0; b * bar < bass.length; b++) {
+    const root = bass.slice(b * bar, b * bar + bar).find((x) => x !== '-' && x !== '.');
     const letter = root ? root.replace(/\d/, '') : 'C';
     out.push(letter + (DIATONIC[letter] ?? ''));
   }
@@ -225,9 +230,9 @@ const FILES: Record<string, { src: string; loop: boolean; volume: number }> = {
 
 let audioEl: HTMLAudioElement | null = null;
 
-const NOTE: Record<string, number> = { C: 0, 'C#': 1, D: 2, 'D#': 3, E: 4, F: 5, 'F#': 6, G: 7, 'G#': 8, A: 9, 'A#': 10, B: 11 };
+const NOTE: Record<string, number> = { C: 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4, F: 5, 'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11 };
 const freq = (n: string) => {
-  const m = /^([A-G]#?)(\d)$/.exec(n);
+  const m = /^([A-G][#b]?)(\d)$/.exec(n);
   if (!m) return 0;
   const midi = NOTE[m[1]] + (Number(m[2]) + 1) * 12;
   return 440 * Math.pow(2, (midi - 69) / 12);
@@ -240,14 +245,23 @@ let nextTime = 0;
 let master: GainNode | null = null;
 let fmNodes: AudioNode[] = [];
 
+/** Identity of what is actually sounding (style + resolved tune), so two names that
+ *  resolve to the same tune (e.g. 'teaparty' and 'night' in 16-bit) continue seamlessly. */
+let playingKey: string | null = null;
+const keyOf = (name: string) => (is16() ? '16:' : '8:') + resolve(name);
+
 export function playMusic(name: string) {
-  if (current === name && (timer !== null || audioEl)) return;
+  if ((timer !== null || audioEl) && playingKey === keyOf(name)) {
+    current = name; // same tune already sounding: carry on, don't restart
+    return;
+  }
   stopMusic();
   current = name;
   start();
 }
 
 export function stopMusic() {
+  playingKey = null;
   if (audioEl) {
     audioEl.pause();
     audioEl = null;
@@ -287,11 +301,15 @@ function start() {
   const name = resolve(current);
   if (is16() && TRACKS16[name]) {
     const c = getAudio();
-    if (c) startFM(c, TRACKS16[name]);
+    if (c) {
+      playingKey = keyOf(current);
+      startFM(c, TRACKS16[name]);
+    }
     return;
   }
   const file = FILES[name];
   if (file) {
+    playingKey = keyOf(current);
     audioEl = new Audio(file.src);
     audioEl.loop = file.loop;
     audioEl.volume = file.volume;
@@ -303,6 +321,7 @@ function start() {
   if (!ctx) return;
   const t = TRACKS[name];
   if (!t) return;
+  playingKey = keyOf(current);
   const lead = t.lead.trim().split(/\s+/);
   const bass = t.bass.trim().split(/\s+/);
   const drums = t.drums.split('');
@@ -325,30 +344,38 @@ function start() {
     while (nextTime < ctx.currentTime + 0.25) {
       const i = step % len;
       const ln = lead[i];
-      if (ln && ln !== '-' && ln !== '.') note(ctx, master, 'square', freq(ln), nextTime, eighth * holdLen(lead, i) * 0.9, 0.05);
+      if (ln && ln !== '-' && ln !== '.') note(ctx, master, t.wave ?? 'square', freq(ln), nextTime, eighth * holdLen(lead, i) * 0.9, t.lv ?? 0.05);
       const bn = bass[i];
       if (bn && bn !== '-' && bn !== '.') note(ctx, master, 'triangle', freq(bn), nextTime, eighth * holdLen(bass, i) * 0.85, 0.12);
       const d = drums[i % drums.length];
       if (d === 'x') hat(ctx, master, nextTime, 0.02);
       if (d === 'o') thump(ctx, master, nextTime);
+      if (d === 's') noiseBurst(ctx, master, nextTime, 0.08, 0.06, 'bandpass', 2200);
+      if (d === 'b') note(ctx, master, 'sine', 700 + Math.random() * 500, nextTime, 0.07, 0.05, 1.8);
+      if (d === 'w') windGust(ctx, master, nextTime, eighth * (t.bar ?? 8) * 1.9, 0.3);
       nextTime += eighth;
       step++;
     }
   }, 50);
 }
 
-function note(ctx: AudioContext, out: AudioNode, type: OscillatorType, f: number, t: number, dur: number, vol: number) {
+function note(ctx: AudioContext, out: AudioNode, type: OscillatorType, f: number, t: number, dur: number, vol: number, sweep = 1) {
   if (!f) return;
   const o = ctx.createOscillator();
   const g = ctx.createGain();
   o.type = type;
   o.frequency.setValueAtTime(f, t);
+  if (sweep !== 1) o.frequency.exponentialRampToValueAtTime(f * sweep, t + dur);
   g.gain.setValueAtTime(vol, t);
   g.gain.setValueAtTime(vol, t + dur * 0.7);
   g.gain.linearRampToValueAtTime(0.0001, t + dur);
   o.connect(g).connect(out);
   o.start(t);
   o.stop(t + dur + 0.02);
+  o.onended = () => {
+    o.disconnect();
+    g.disconnect();
+  };
 }
 
 let noiseBuf: AudioBuffer | null = null;
@@ -447,10 +474,12 @@ function startFM(ctx: AudioContext, t: Track16) {
 
   const lead = t.lead.trim().split(/\s+/);
   const bass = t.bass.trim().split(/\s+/);
+  const bar8 = t.bar ?? 8;
+  const bl = bar8 * 2; // sixteenths per bar
   const len8 = Math.max(lead.length, bass.length);
   const len16 = len8 * 2;
-  const bars = len8 / 8;
-  const chords = (t.chords ? t.chords.trim().split(/\s+/) : deriveChords(bass)).map(parseChord);
+  const bars = len8 / bar8;
+  const chords = (t.chords ? t.chords.trim().split(/\s+/) : deriveChords(bass, bar8)).map(parseChord);
   const hold = (arr: string[], i: number) => {
     let n = 1;
     while (arr[i + n] === '-' && i + n < arr.length) n++;
@@ -460,8 +489,8 @@ function startFM(ctx: AudioContext, t: Track16) {
   let arpI = 0;
 
   const tick = (s: number, tm: number) => {
-    const p = s % 16;
-    const bar = Math.floor(s / 16);
+    const p = s % bl;
+    const bar = Math.floor(s / bl);
     const ch = chords[bar % chords.length];
     if (!(s & 1)) {
       const e = s >> 1;
@@ -471,15 +500,16 @@ function startFM(ctx: AudioContext, t: Track16) {
       if (bn && bn !== '-' && bn !== '.') fmNote(ctx, cBass, PATCH.bass, freq(bn), tm, Math.min(sx * 2 * hold(bass, e), sx * 5) * 0.9);
     }
     const d = t.drums;
-    const fill = t.fill && bar === bars - 1 && p >= 12;
+    const fill = t.fill && bar === bars - 1 && p >= bl - 4;
     if (on(d.k, s, 'k')) fmKick(ctx, cKick, tm);
-    if (fill) fmTom(ctx, cTom, tm, [230, 190, 150, 115][p - 12], 0.85);
+    if (fill) fmTom(ctx, cTom, tm, [230, 190, 150, 115][p - (bl - 4)], 0.85);
     else if (on(d.s, s, 's')) fmSnare(ctx, cSnare, tm);
     if (on(d.h, s, 'h')) fmHat(ctx, cHat, tm, p % 4 === 0 ? 1 : 0.65);
     if (on(d.o, s, 'o') && !fill) fmHat(ctx, cHat, tm, 0.9, true);
     const base = ch.pc > 6 ? 48 : 60;
     if (on(t.stab, s)) for (const iv of ch.iv) fmNote(ctx, cStab, PATCH.stab, mtof(base + ch.pc + iv), tm, sx * 1.6);
-    if (t.pad && p === 0) for (const iv of ch.iv) fmNote(ctx, cPad, PATCH.pad, mtof(base + ch.pc + iv), tm, sx * 15);
+    if (t.pad && p === 0) for (const iv of ch.iv) fmNote(ctx, cPad, PATCH.pad, mtof(base + ch.pc + iv), tm, sx * (bl - 1));
+    if (t.wind && p === 0 && bar % 2 === 0) windGust(ctx, cPad, tm, sx * bl * 1.9, t.wind, 650);
     if (t.arp) {
       if (p === 0) arpI = 0;
       if (on(t.arp.pat, s)) {
@@ -505,3 +535,359 @@ function startFM(ctx: AudioContext, t: Track16) {
     }
   }, 50);
 }
+
+// ---------------------------------------------------------------------------
+// Original tunes added later. Each is defined once (lead melody + chord roots + bass
+// pattern) and registered as BOTH a chip arrangement (TRACKS: square/triangle/noise) and
+// an FM arrangement (TRACKS16). All melodies are original to this game.
+//   bustle   kitchen/pantry   G major 152  busy and bouncy
+//   waltz    dining/drawing   D major 126  3/4, stately, 12 bars
+//   crypt    cellar           A minor  92  creepy-cosy
+//   lullaby  bedrooms         F major  66  slow and rocking
+//   bubbles  bathroom         D major 144  playful staccato
+//   attic    attic            E minor  76  sparse, windy
+//   jaunty   drive/terrace    F major 126  marching swagger
+//   quest    fells            D minor 140  adventurous gallop
+//   zombie_house   (Zombie Night, indoors)  D minor 100  plodding, spooky-fun
+//   zombie_outside (Zombie Night, outdoors) E minor  72  eerie, misty, sparse
+//   dawn     (Zombie Night ending)          C major 108  sunrise
+// ---------------------------------------------------------------------------
+const midiOf = (n: string) => {
+  const m = /^([A-G][#b]?)(\d)$/.exec(n);
+  return m ? NOTE[m[1]] + (Number(m[2]) + 1) * 12 : 0;
+};
+const SHARPS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const midiName = (m: number) => SHARPS[m % 12] + (Math.floor(m / 12) - 1);
+const OFF: Record<string, number> = { '1': 0, m: 3, t: 4, '5': 7, '6': 9, b: 10, '8': 12 };
+
+/** One bass pattern per bar: tokens 1=root m=minor3rd t=major3rd 5=fifth 6=sixth b=flat7th 8=octave, '-' hold, '.' rest. */
+function walk(roots: string, tpl: string): string {
+  const out: string[] = [];
+  for (const r of roots.trim().split(/\s+/)) {
+    const m = midiOf(r);
+    for (const tk of tpl.trim().split(/\s+/)) out.push(tk in OFF ? midiName(m + OFF[tk]) : tk);
+  }
+  return out.join(' ');
+}
+
+interface Tune {
+  bpm: number;
+  bar?: number;
+  lead: string;
+  roots: string;
+  tpl: string;
+  chords: string;
+  chip: string; // chip drum pattern
+  wave?: OscillatorType;
+  lv?: number;
+  fm: Omit<Track16, 'bpm' | 'lead' | 'bass' | 'chords' | 'bar'>;
+}
+function def(name: string, t: Tune) {
+  const bass = walk(t.roots, t.tpl);
+  TRACKS[name] = { bpm: t.bpm, bar: t.bar, lead: t.lead, bass, drums: t.chip, wave: t.wave, lv: t.lv };
+  TRACKS16[name] = { bpm: t.bpm, bar: t.bar, lead: t.lead, bass, chords: t.chords, ...t.fm };
+}
+const D16 = '................';
+
+// kitchen / pantry: busy, bouncy
+def('bustle', {
+  bpm: 152,
+  lead:
+    'G5 . D5 G5 . B5 A5 G5 ' +
+    'E5 . G5 C6 . B5 A5 G5 ' +
+    'B4 D5 G5 D5 B5 . G5 . ' +
+    'F#5 . A5 . D6 C6 B5 A5 ' +
+    'G5 . E5 G5 B5 . A5 G5 ' +
+    'E5 G5 C6 G5 E5 . G5 C6 ' +
+    'D6 . C6 B5 A5 . F#5 A5 ' +
+    'G5 B5 D6 B5 G5 - . .',
+  roots: 'G2 C3 G2 D3 E3 C3 D3 G2',
+  tpl: '1 . 5 . 1 . 5 5',
+  chords: 'G C G D Em C D G',
+  chip: 'o.x.s.x.',
+  fm: {
+    leadVoice: 'lead',
+    drums: { k: 'k...k...k...k...', s: '....s.......s...', h: 'h.h.h.h.h.h.h.h.', o: '..............o.' },
+    stab: '..x...x...x...x.',
+    arp: { pat: '.x...x...x...x.x', voice: 'pluck', oct: 5, vel: 0.35 },
+    pad: true,
+    fill: true,
+    swing: 0.15,
+    echo: 0.12,
+  },
+});
+
+// dining / drawing room: a stately waltz
+def('waltz', {
+  bpm: 126,
+  bar: 6,
+  lead:
+    'F#5 - A5 - D6 - ' +
+    'D6 - B5 - F#5 - ' +
+    'G5 - B5 - D6 - ' +
+    'C#6 - B5 A5 G5 - ' +
+    'F#5 A5 D6 - F#6 - ' +
+    'F#6 - E6 - C#6 - ' +
+    'D6 - B5 - A5 B5 ' +
+    'G5 - B5 - E6 - ' +
+    'D6 - B5 - G5 - ' +
+    'E5 G5 A5 C#6 E6 - ' +
+    'D6 - A5 - F#5 - ' +
+    'A5 - G5 - E5 -',
+  roots: 'D3 B2 G2 A2 D3 F#2 B2 E3 G2 A2 D3 A2',
+  tpl: '1 . 8 . 8 .',
+  chords: 'D Bm G A7 D F#m Bm Em G A7 D A7',
+  chip: 'o.x.x.',
+  fm: {
+    leadVoice: 'ep',
+    drums: { k: 'k...........', s: D16, h: '....h...h...' },
+    stab: '....x...x...',
+    arp: { pat: 'x.....x.....x.....x.....', voice: 'bell', oct: 5, vel: 0.45 },
+    pad: true,
+    echo: 0.26,
+  },
+});
+
+// cellar: creepy-cosy, minor
+def('crypt', {
+  bpm: 92,
+  wave: 'triangle',
+  lv: 0.1,
+  lead:
+    'E5 - - C5 B4 - A4 - ' +
+    'G#4 - B4 - E5 - - - ' +
+    'A5 - - F5 E5 - D5 - ' +
+    'E5 - D#5 - E5 - B4 - ' +
+    'C5 - E5 - A5 - G5 - ' +
+    'F5 - A5 - D6 - C6 - ' +
+    'B5 - G#5 - E5 - D5 - ' +
+    'C5 - B4 - A4 - . .',
+  roots: 'A2 A2 F2 E2 A2 D3 E2 A2',
+  tpl: '1 - . . 5 - 1 .',
+  chords: 'Am Am F E Am Dm E7 Am',
+  chip: 'o.....x.',
+  fm: {
+    leadVoice: 'ep',
+    drums: { k: 'k.......k.......', s: D16, h: '....h.......h...' },
+    arp: { pat: '..x.....x.......', voice: 'bell', oct: 5, vel: 0.5 },
+    pad: true,
+    swing: 0.2,
+    echo: 0.4,
+  },
+});
+
+// upstairs landing and bedrooms: a slow, rocking lullaby
+def('lullaby', {
+  bpm: 66,
+  wave: 'triangle',
+  lv: 0.1,
+  lead:
+    'A5 - - C6 A5 - F5 - ' +
+    'D5 - F5 - A5 - - - ' +
+    'Bb5 - A5 - G5 - F5 - ' +
+    'E5 - G5 - Bb5 - A5 G5 ' +
+    'A5 - - C6 D6 - C6 - ' +
+    'E5 - A5 - C6 - B5 A5 ' +
+    'D6 - C6 - Bb5 - A5 - ' +
+    'G5 - E5 - G5 - . .',
+  roots: 'F2 D3 Bb2 C3 F2 A2 Bb2 C3',
+  tpl: '1 . 5 . 8 . 5 .',
+  chords: 'F Dm Bb C7 F Am Bb C',
+  chip: '........',
+  fm: {
+    leadVoice: 'ep',
+    drums: { k: D16, s: D16, h: D16 },
+    arp: { pat: '..x...x...x...x.', voice: 'bell', oct: 5, vel: 0.4 },
+    pad: true,
+    echo: 0.34,
+  },
+});
+
+// bathroom: bubbly, playful
+def('bubbles', {
+  bpm: 144,
+  lead:
+    'D5 F#5 A5 F#5 D6 . A5 . ' +
+    'B5 . G5 B5 D6 . B5 G5 ' +
+    'A5 F#5 D5 F#5 A5 D6 . F#6 ' +
+    'E6 . C#6 . A5 . E5 . ' +
+    'D6 . A5 D6 F#6 . D6 A5 ' +
+    'G5 B5 D6 B5 G6 . D6 . ' +
+    'C#6 E6 A6 E6 C#6 . A5 E5 ' +
+    'D6 A5 F#5 A5 D5 - . .',
+  roots: 'D3 G2 D3 A2 D3 G2 A2 D3',
+  tpl: '1 . 1 . 5 . 8 .',
+  chords: 'D G D A D G A D',
+  chip: 'b.xbb.x.',
+  fm: {
+    leadVoice: 'pluck',
+    drums: { k: 'k.......k.......', s: D16, h: 'h.h.h.h.h.h.h.h.' },
+    arp: { pat: '.x..x.x...x..x.x', voice: 'bell', oct: 6, vel: 0.5 },
+    pad: true,
+    swing: 0.25,
+    echo: 0.3,
+  },
+});
+
+// attic: mysterious and windy
+def('attic', {
+  bpm: 76,
+  wave: 'triangle',
+  lv: 0.1,
+  lead:
+    'B4 - - - E5 - - G5 ' +
+    'B5 - - - G5 - E5 - ' +
+    'A4 - C5 - E5 - - - ' +
+    'D#5 - F#5 - B5 - A5 - ' +
+    'G5 - - F#5 E5 - - B4 ' +
+    'C5 - E5 - G5 - B5 - ' +
+    'A5 - F#5 - D#5 - - - ' +
+    'E5 - - - - - . .',
+  roots: 'E2 C3 A2 B2 E2 C3 B2 E2',
+  tpl: '1 - - - - - 5 -',
+  chords: 'Em Cmaj7 Am B7 Em Cmaj7 B7 Em',
+  chip: 'w...............',
+  fm: {
+    leadVoice: 'ghost',
+    drums: { k: D16, s: D16, h: D16 },
+    arp: { pat: '....x.......x...', voice: 'bell', oct: 6, vel: 0.4 },
+    pad: true,
+    wind: 0.5,
+    echo: 0.42,
+  },
+});
+
+// drive / terrace: jaunty march
+def('jaunty', {
+  bpm: 126,
+  lead:
+    'A5 . C6 A5 F5 . A5 C6 ' +
+    'D6 . Bb5 D6 F6 . D6 Bb5 ' +
+    'A5 . C6 A5 F5 . G5 A5 ' +
+    'G5 . E5 G5 C6 - - . ' +
+    'F6 . C6 A5 C6 . A5 F5 ' +
+    'D6 . F6 D6 Bb5 . D6 F6 ' +
+    'E6 . D6 C6 Bb5 . G5 E5 ' +
+    'F5 A5 C6 A5 F5 - . .',
+  roots: 'F2 Bb2 F2 C3 F2 Bb2 C3 F2',
+  tpl: '1 . 5 . 8 . 5 1',
+  chords: 'F Bb F C F Bb C7 F',
+  chip: 'o.s.o.sx',
+  fm: {
+    leadVoice: 'brass',
+    drums: { k: 'k...k...k...k...', s: '..s...s...s...s.', h: 'h.h.h.h.h.h.h.h.' },
+    stab: '..x...x...x...x.',
+    pad: true,
+    swing: 0.3,
+    echo: 0.15,
+  },
+});
+
+// fells: adventurous gallop
+def('quest', {
+  bpm: 140,
+  lead:
+    'D5 F5 A5 - D6 - C6 A5 ' +
+    'Bb5 - A5 - F5 - D5 F5 ' +
+    'A5 - C6 - F6 - E6 C6 ' +
+    'G5 - C6 - E6 - D6 C6 ' +
+    'D6 - F6 - A6 - G6 F6 ' +
+    'D6 - Bb5 - D6 - F6 - ' +
+    'E6 - D6 - C6 - G5 - ' +
+    'C#6 - E6 - A6 - . .',
+  roots: 'D3 Bb2 F2 C3 D3 Bb2 C3 A2',
+  tpl: '1 1 8 1 1 8 1 5',
+  chords: 'Dm Bb F C Dm Bb C A',
+  chip: 'oxsxoxsx',
+  fm: {
+    leadVoice: 'brass',
+    drums: { k: 'k.....k.k.....k.', s: '....s.......s...', h: 'hhhhhhhhhhhhhhhh', o: '..o...o...o...o.' },
+    arp: { pat: 'x.x.x.x.x.x.x.x.', voice: 'pluck', oct: 4, vel: 0.35 },
+    pad: true,
+    fill: true,
+    echo: 0.18,
+  },
+});
+
+// ZOMBIE NIGHT: indoors, spooky but fun, a plodding lurch
+def('zombie_house', {
+  bpm: 100,
+  lead:
+    'D5 . D5 F5 . E5 D5 . ' +
+    'A4 . D5 . F5 - - - ' +
+    'Bb4 . Bb4 D5 . C5 Bb4 . ' +
+    'C#5 . E5 . A5 - - . ' +
+    'D5 . D5 F5 . G5 A5 . ' +
+    'Bb5 . A5 . G5 . F5 . ' +
+    'E5 . G5 . A5 . C#6 . ' +
+    'A5 - G5 - E5 - . .',
+  roots: 'D3 D3 Bb2 A2 D3 G2 A2 A2',
+  tpl: '1 . . . 1 . 5 .',
+  chords: 'Dm Dm Bb A Dm Gm A7 A7',
+  chip: 'o...s.o.',
+  fm: {
+    leadVoice: 'reed',
+    drums: { k: 'k.......k.....k.', s: '....s.......s...', h: 'h...h...h...h...' },
+    arp: { pat: '.......x........', voice: 'bell', oct: 5, vel: 0.5 },
+    pad: true,
+    swing: 0.35,
+    echo: 0.3,
+  },
+});
+
+// ZOMBIE NIGHT: outdoors, eerie, misty, sparse
+def('zombie_outside', {
+  bpm: 72,
+  wave: 'triangle',
+  lv: 0.1,
+  lead:
+    'B4 - - - - - E5 - ' +
+    'G5 - - - F#5 - - - ' +
+    'E5 - - - C5 - A4 - ' +
+    'B4 - - - - - . . ' +
+    'G4 - C5 - E5 - - - ' +
+    'D#5 - - - F#5 - - A5 ' +
+    'G5 - - - - - B5 - ' +
+    'E5 - - - - - . .',
+  roots: 'E2 E2 A2 A2 C3 B2 E2 E2',
+  tpl: '1 - - - - - - -',
+  chords: 'Em Em Am Am C B7 Em Em',
+  chip: 'w...............',
+  fm: {
+    leadVoice: 'ghost',
+    drums: { k: D16, s: D16, h: D16 },
+    arp: { pat: '........x.......', voice: 'bell', oct: 6, vel: 0.35 },
+    pad: true,
+    wind: 0.4,
+    echo: 0.45,
+  },
+});
+
+// ZOMBIE NIGHT: the sun comes up (hopeful, triumphant)
+def('dawn', {
+  bpm: 108,
+  lead:
+    'E5 - G5 - C6 - - - ' +
+    'B5 - D6 - G6 - - - ' +
+    'A5 - C6 - E6 - D6 C6 ' +
+    'A5 - C6 - F6 - E6 - ' +
+    'G5 C6 E6 - G6 - E6 C6 ' +
+    'D6 - B5 - G5 B5 D6 - ' +
+    'C6 - A5 - F5 A5 C6 - ' +
+    'E6 - D6 - C6 - - -',
+  roots: 'C3 G2 A2 F2 C3 G2 F2 C3',
+  tpl: '1 5 8 5 1 5 8 5',
+  chords: 'C G Am F C G F C',
+  chip: 'o.x.o.x.',
+  fm: {
+    leadVoice: 'brass',
+    drums: { k: 'k...k...k...k...', s: '........s.......', h: 'h.h.h.h.h.h.h.h.' },
+    arp: { pat: 'x.x.x.x.x.x.x.x.', voice: 'bell', oct: 5, vel: 0.55 },
+    pad: true,
+    fill: true,
+    echo: 0.25,
+  },
+});
+
+/** Exposed for tests/tools: the registered tune tables. */
+export const tuneData = { TRACKS, TRACKS16 };

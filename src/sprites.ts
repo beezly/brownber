@@ -3,6 +3,7 @@ import { PAL } from './palette';
 import { BINKS_FRAMES, BINKS_PAL, CHARACTERS, FRAMES, buildFrame, charPalette } from './characters';
 import { EXTRA_SPRITES } from './rooms';
 import { is16 } from './settings';
+import { zombieFrame, CURE_ITEM_SPRITES, WANT_BUBBLE } from './zombie-art';
 import { darken, lighten } from './colour';
 
 type Pal = Record<string, number>;
@@ -184,6 +185,15 @@ export function bakeAll(scene: Phaser.Scene) {
   bake(scene, 'hoover', HOOVER.rows, HOOVER.pal);
   bake(scene, 'jar', JAR.rows, JAR.pal);
   for (const [k, v] of Object.entries(EXTRA_SPRITES)) bake(scene, k, v.rows, v.pal);
+  // Zombie Night: zombie versions of everyone, cure items and the "wants" bubble
+  for (const def of CHARACTERS) {
+    for (const f of FRAMES) {
+      const z = zombieFrame(def, f);
+      bake(scene, `${def.id}_z_${f}`, z.rows, z.pal);
+    }
+  }
+  for (const [k, v] of Object.entries(CURE_ITEM_SPRITES)) bake(scene, k, v.rows, v.pal);
+  bake(scene, 'want_bubble', WANT_BUBBLE.rows, WANT_BUBBLE.pal);
   // a little speech-bubble marker shown above talkable NPCs
   bake(scene, 'bubble', ['.kkkkk.', 'kwwwwwk', 'kwkwkwk', 'kwwwwwk', '.kkwkk.', '...k...'], { k: PAL.ink, w: PAL.white });
 }

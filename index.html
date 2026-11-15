@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1a1c2c" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <title>Brownber Buddies</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="game"></div>
+
+  <div id="touch" aria-hidden="true">
+    <div id="pad" class="zone left">
+      <div class="btn dir" data-dir="left">&#9664;</div>
+      <div class="btn dir" data-dir="right">&#9654;</div>
+    </div>
+    <div class="zone right">
+      <div class="row">
+        <div class="btn small" id="btn-power">POWER</div>
+        <div class="btn small" id="btn-talk">TALK</div>
+      </div>
+      <div class="btn big" id="btn-jump">JUMP</div>
+    </div>
+  </div>
+
+  <button id="mute" title="Sound on/off (M)">&#9835;</button>
+
+  <div id="rotate">
+    <div>
+      <div class="phone">&#128241;</div>
+      <p>Turn your phone sideways to play</p>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

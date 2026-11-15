@@ -1,0 +1,9 @@
+{
+  "name": "Brownber Buddies",
+  "short_name": "Brownber",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#1a1c2c",
+  "theme_color": "#1a1c2c",
+  "start_url": "./"
+}

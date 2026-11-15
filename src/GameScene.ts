@@ -282,7 +282,7 @@ export class GameScene extends Phaser.Scene {
     this.dyn = this.add.graphics().setDepth(1);
     this.player = this.add.image(0, 0, `${this.hero.id}_idle`).setOrigin(0.5, 1).setDepth(5);
     if (this.hasCompanion) {
-      const sprite = this.add.image(0, 0, 'binks_a').setOrigin(0.5, 1).setDepth(5);
+      const sprite = this.add.image(0, 0, 'binks_a').setOrigin(0.5, 1).setDepth(4.9); // behind the player
       this.pal = { x: NaN, y: 0, phase: 0, sprite, fetch: null, woof: 0 };
     }
     this.dark = this.add.graphics().setDepth(5.5);
@@ -2353,10 +2353,17 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     const tx = this.px + PW / 2 - this.facing * 14;
-    const ty = this.py + PH;
     const before = c.x;
     c.x += (tx - c.x) * 0.12;
-    c.y += (ty - c.y) * 0.2;
+    // Binks stays on the ground while you're in the air, and hops to your level once you land
+    const groundUnder = () => {
+      const col = Phaser.Math.Clamp(Math.floor(c.x / T), 0, COLS - 1);
+      for (let r = Math.max(0, Math.floor((c.y - 2) / T)); r < ROWS; r++) if (isSupport(this.tile(col, r))) return r * T;
+      return c.y;
+    };
+    const ty = this.grounded || this.lying ? this.py + PH : groundUnder();
+    if (Math.abs(ty - c.y) > 0.5) c.y += Phaser.Math.Clamp((ty - c.y) * 0.2, -3, 3.5);
+    else c.y = ty;
     if (Math.abs(c.x - before) > 0.2 && !this.lying) c.phase += 0.25;
   }
 

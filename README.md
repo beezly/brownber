@@ -60,8 +60,6 @@ This outputs a static site in `dist/` that can be hosted anywhere.
 
 ## Publish
 
-```bash
-npm run deploy
-```
+Every push to `main` builds the game and deploys it to GitHub Pages automatically (`.github/workflows/deploy.yml`). It's live at **https://beez.ly/brownber/** a minute or two later.
 
-This builds the game and force-pushes `dist/` to the `gh-pages` branch. GitHub Pages serves it at **https://beez.ly/brownber/**.
+`npm run deploy` is still there as a manual fallback. It pushes a build to the `gh-pages` branch, but Pages only serves that branch if you switch the Pages source back to "Deploy from a branch".

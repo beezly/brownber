@@ -11,6 +11,7 @@ import { loadSave, writeSave, clearSave, type SaveData } from './save';
 import { CHARACTERS } from './characters';
 import { is16 } from './settings';
 import { darken, lighten, mix } from './colour';
+import { addLegend } from './legends';
 import { CURES, CURED_LINES, ZOMBIE_DAWN, ZOMBIE_ITEM_OVERRIDES, ZOMBIE_START } from './zombie';
 
 /** Zombie-mode sounds come from the audio module; call them only if they exist. */
@@ -159,7 +160,8 @@ export class GameScene extends Phaser.Scene {
   private bites = 0;
   private tidyCd = 0;
   private beatT = 0;
-  private roomT = 0; // frame you entered the room (zombies give you a moment)
+  private roomT = 0;
+  private legendDawn = false; // frame you entered the room (zombies give you a moment)
   private dark!: Phaser.GameObjects.Graphics;
   private talked = new Set<string>();
   private visited = new Set<string>();
@@ -176,6 +178,9 @@ export class GameScene extends Phaser.Scene {
     lines: string[];
     star: boolean;
     textAt: number;
+    hero: boolean; // 100% run: speech, cheers, fireworks, then the credits
+    speechAt: number;
+    speaker: CharDef | null;
   } | null = null;
   private overText: string[] = [];
 
@@ -231,6 +236,7 @@ export class GameScene extends Phaser.Scene {
     this.held = new Set();
     this.hasTorch = false;
     this.bitten = this.bites = this.tidyCd = this.beatT = 0;
+    this.legendDawn = false;
     this.hasLighter = false;
     this.deaths = 0;
     this.lastSave = 0;
@@ -966,7 +972,10 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     if (this.state === 'won' || this.state === 'over') {
-      if ((input.takeJump() || input.takeTalk()) && this.frame > 30) this.scene.start('title');
+      if ((input.takeJump() || input.takeTalk()) && this.frame > 30) {
+        if (this.legendDawn) this.scene.start('credits', { hero: this.hero.id });
+        else this.scene.start('title');
+      }
       return;
     }
 
@@ -1664,7 +1673,12 @@ export class GameScene extends Phaser.Scene {
   private zombieDawn() {
     const n = this.cured.size;
     const total = CHARACTERS.length - 1;
-    const title = n >= total ? 'EVERYONE SAVED!' : n >= 6 ? 'DAWN BREAKS' : 'MORNING, AT LAST';
+    const hero100 = this.isHundredPercent();
+    if (hero100) {
+      addLegend(this.hero.id, this.mode);
+      this.legendDawn = true;
+    }
+    const title = hero100 ? 'BROWNBER LEGEND!' : n >= total ? 'EVERYONE SAVED!' : n >= 6 ? 'DAWN BREAKS' : 'MORNING, AT LAST';
     clearSave();
     this.state = 'won';
     this.overText = [
@@ -1825,6 +1839,7 @@ export class GameScene extends Phaser.Scene {
     });
 
     const n = friends.length;
+    const hero100 = this.isHundredPercent();
     const pct = this.collected.size / TOTAL_ITEMS;
     let title: string;
     let lines: string[];
@@ -1862,7 +1877,23 @@ export class GameScene extends Phaser.Scene {
       lines.push('', `CURED ${n}/${total}   ITEMS ${this.collected.size}/${TOTAL_ITEMS}`, `LIT AT ${this.timeString()}   BITES ${this.bites}`);
     } else lines.push('', `FRIENDS ${n}/${CHARACTERS.length - 1}   ITEMS ${this.collected.size}/${TOTAL_ITEMS}`, `LIT AT ${this.timeString()}   TUMBLES ${this.deaths}`);
     const lastArrive = friends.reduce((m, f) => Math.max(m, f.delay + Math.abs(f.tx + 12) / 1.4), 60);
-    this.finale = { t: 0, fire, friends, title, lines, star, textAt: Math.min(lastArrive + 40, 900) };
+    let textAt = Math.min(lastArrive + 40, 900);
+    let speechAt = 0;
+    let speaker: CharDef | null = null;
+    if (hero100) {
+      addLegend(this.hero.id, this.mode);
+      title = 'BROWNBER LEGEND';
+      const name = this.hero.name.toUpperCase();
+      lines = this.zm
+        ? [`${name} CURED EVERY FRIEND`, 'AND FOUND EVERY LAST PARTY BIT.', 'THE ZOMBIE NIGHT IS OVER!']
+        : [`${name} FOUND EVERY FRIEND`, 'AND EVERY LAST PARTY BIT.', 'A TRUE LEGEND OF BROWNBER HALL!'];
+      lines.push('', `FRIENDS ${n}/${CHARACTERS.length - 1}   ITEMS ${this.collected.size}/${TOTAL_ITEMS}`, `LIT AT ${this.timeString()}   ${this.zm ? 'BITES ' + this.bites : 'TUMBLES ' + this.deaths}`);
+      star = false;
+      speaker = charById(this.hero.id === 'tom' ? 'luke' : 'tom');
+      speechAt = Math.min(lastArrive + 30, 860);
+      textAt = speechAt + 420;
+    }
+    this.finale = { t: 0, fire, friends, title, lines, star, textAt, hero: hero100, speechAt, speaker };
     input.clearLatches();
   }
 
@@ -1891,7 +1922,7 @@ export class GameScene extends Phaser.Scene {
       fr.sprite.setPosition(Math.round(fr.x), fr.y);
       if (fr.def.id === 'beth' && Math.abs(fr.x - fr.tx) < 1.5 && !fr.sprite.getData('said')) {
         fr.sprite.setData('said', true);
-        this.say('BETH: SORRY! I SAID FIVE MINUTES, DIDN\'T I?', 180);
+        this.say('BETH: SORRY! FIVE MINUTES, I SAID!', 180);
       }
     }
     // sparks from the fire
@@ -1899,7 +1930,41 @@ export class GameScene extends Phaser.Scene {
       const ft = f.fire[Math.floor(Math.random() * f.fire.length)];
       this.parts.push({ x: ft.c * T + 4, y: ft.r * T - 4, vx: (Math.random() - 0.5) * 0.6, vy: -0.8 - Math.random(), t: 40, color: Math.random() < 0.5 ? PAL.yellow : PAL.orange, kind: 'dot' });
     }
-    if (f.t > f.textAt + 30 && (input.takeJump() || input.takeTalk())) this.scene.start('title');
+    if (f.hero && f.t > f.speechAt + 240) {
+      // everyone cheers and bounces; fireworks over the fells
+      for (const [i, fr] of f.friends.entries()) {
+        const hop = Math.abs(Math.sin((f.t + i * 9) * 0.18)) * 6;
+        fr.sprite.setY(Math.round(fr.y - hop));
+      }
+      if (f.t % 26 === 0) this.firework();
+    }
+    if (f.hero && f.t === f.speechAt + 240) {
+      this.say('HOORAY! HIP HIP HOORAY!', 150);
+      sfx.win();
+    }
+    if (f.t > f.textAt + 30 && (input.takeJump() || input.takeTalk())) {
+      if (f.hero) this.scene.start('credits', { hero: this.hero.id });
+      else this.scene.start('title');
+    }
+  }
+
+  /** True when every other friend has been met (or cured) and every item found. */
+  private isHundredPercent() {
+    const others = CHARACTERS.filter((c) => c.id !== this.hero.id).map((c) => c.id);
+    const friendsDone = others.every((id) => (this.zm ? this.cured : this.talked).has(id));
+    return friendsDone && this.collected.size >= TOTAL_ITEMS;
+  }
+
+  private firework() {
+    const x = 30 + Math.random() * (RW - 60);
+    const y = 18 + Math.random() * 50;
+    const col = [PAL.yellow, PAL.red, PAL.lime, 0x73eff7, PAL.orange, PAL.white][Math.floor(Math.random() * 6)];
+    for (let i = 0; i < 22; i++) {
+      const a = (i / 22) * Math.PI * 2;
+      const v = 1 + Math.random() * 0.6;
+      this.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 40 + Math.floor(Math.random() * 15), color: col, kind: 'dot' });
+    }
+    sfx.bounce();
   }
 
   private drawFinale(g: Phaser.GameObjects.Graphics) {
@@ -1929,6 +1994,22 @@ export class GameScene extends Phaser.Scene {
         g.fillStyle(PAL.white, 1 - i / 12);
         g.fillRect(Math.round(sx - i * 3), Math.round(sy - i * 0.6), 2, 1);
       }
+    }
+    // the speech (100% runs)
+    if (f.hero && f.speaker && f.t >= f.speechAt && f.t < f.textAt) {
+      const name = this.hero.name;
+      const speech =
+        f.t < f.speechAt + 240
+          ? `Can I just say a few words about ${name}? Every friend. Every party bit. An absolute legend!`
+          : `To ${name}! Brownber Hall will never forget this night.`;
+      g.fillStyle(PAL.ink, 0.92);
+      g.fillRect(4, 4, RW - 8, 46);
+      g.lineStyle(1, PAL.yellow, 1);
+      g.strokeRect(4.5, 4.5, RW - 9, 45);
+      drawText(g, f.speaker.name, 10, 9, PAL.yellow);
+      wrap(speech, 40)
+        .slice(0, 3)
+        .forEach((l, i) => drawText(g, l, 10, 20 + i * 9, PAL.white));
     }
     // the ending card
     if (f.t >= f.textAt) {

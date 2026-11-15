@@ -15,6 +15,7 @@ import { loadSave, type SaveData } from './save';
 type Mode = 'cosy' | 'classic' | 'zombie';
 const MODES: Mode[] = ['cosy', 'classic', 'zombie'];
 import { BUILD_ID } from './update';
+import { getLegends } from './legends';
 
 const W = 256;
 
@@ -300,6 +301,7 @@ export class SelectScene extends Phaser.Scene {
   private sprites: Phaser.GameObjects.Image[] = [];
   private portrait!: Phaser.GameObjects.Image;
   private t = 0;
+  private legends: Record<string, string[]> = {};
 
   constructor() {
     super('select');
@@ -342,6 +344,7 @@ export class SelectScene extends Phaser.Scene {
       return s;
     });
     this.portrait = this.add.image(10, 118, '__DEFAULT').setOrigin(0);
+    this.legends = getLegends();
     input.clearLatches();
   }
 
@@ -388,6 +391,16 @@ export class SelectScene extends Phaser.Scene {
       } else {
         s.setTexture(`${ch.id}_idle`).setAlpha(ch.placeholder ? 0.5 : 0.85);
       }
+      // gold star for friends who've had a 100% legend run
+      if (this.legends[ch.id]?.length) {
+        const sx = x + 8;
+        const sy = y - 30;
+        const tw = Math.floor((this.t + i * 7) / 20) % 4 === 0;
+        g.fillStyle(tw ? PAL.white : PAL.yellow, 1);
+        g.fillRect(sx + 2, sy, 1, 5);
+        g.fillRect(sx, sy + 2, 5, 1);
+        g.fillRect(sx + 1, sy + 1, 3, 3);
+      }
     });
 
     // info panel
@@ -401,7 +414,8 @@ export class SelectScene extends Phaser.Scene {
 
     drawText(g, c.name, 66, 112, PAL.white, PAL.ink, 2);
     if (c.partner) drawText(g, `+ ${charById(c.partner).name}`, 66 + c.name.length * 12 + 4, 117, PAL.orange);
-    drawText(g, wrap(c.blurb, 31)[0], 66, 130, PAL.lgrey);
+    if (this.legends[c.id]?.length) drawText(g, `* LEGEND: ${this.legends[c.id].join(', ').toUpperCase()}`.slice(0, 31), 66, 130, PAL.yellow);
+    else drawText(g, wrap(c.blurb, 31)[0], 66, 130, PAL.lgrey);
     const ab = ABILITIES[c.ability];
     drawText(g, ab.name + (ab.active ? '' : ' (ALWAYS ON)'), 66, 143, PAL.lime);
     wrap(ab.desc, 31)
@@ -411,5 +425,93 @@ export class SelectScene extends Phaser.Scene {
       drawTextCentered(g, keyName('jump'), 34, 168, PAL.yellow);
       drawTextCentered(g, 'TO PLAY', 34, 177, PAL.yellow);
     }
+  }
+}
+
+// ---------------------------------------------------------------- credits (after a 100% legend run)
+export class CreditsScene extends Phaser.Scene {
+  private g!: Phaser.GameObjects.Graphics;
+  private scroll = 0;
+  private t = 0;
+  private hero = 'beez';
+  private rows: { y: number; draw: (g: Phaser.GameObjects.Graphics, y: number) => void; img?: Phaser.GameObjects.Image; ix?: number }[] = [];
+
+  constructor() {
+    super('credits');
+  }
+
+  init(data: { hero: string }) {
+    this.hero = data.hero ?? 'beez';
+    this.scroll = 0;
+    this.t = 0;
+    this.rows = [];
+  }
+
+  create() {
+    this.cameras.main.setBackgroundColor(PAL.ink);
+    this.g = this.add.graphics().setDepth(2);
+    input.clearLatches();
+    let y = 200;
+    const text = (str: string, color: number, scale = 1, gap = 12) => {
+      const yy = y;
+      this.rows.push({ y: yy, draw: (g, sy) => drawTextCentered(g, str, W / 2, sy, color, PAL.ink, scale) });
+      y += gap;
+    };
+    const heroName = charById(this.hero).name.toUpperCase();
+    text('BROWNBER BUDDIES', PAL.yellow, 2, 24);
+    text('A WEEKEND AT THE HALL', PAL.lgrey, 1, 28);
+    text(`STARRING ${heroName}`, PAL.lime, 1, 10);
+    text('AS THE LEGEND OF BROWNBER HALL', PAL.lime, 1, 30);
+    text('WITH', PAL.white, 1, 18);
+    for (const c of CHARACTERS) {
+      if (c.id === this.hero) continue;
+      const yy = y;
+      const key = this.textures.exists(`portrait_${c.id}`) ? `portrait_${c.id}` : `${c.id}_idle`;
+      const img = this.add.image(0, 0, key).setOrigin(0).setDepth(1).setScale(key.startsWith('portrait') ? 0.75 : 1.5);
+      this.rows.push({
+        y: yy,
+        img,
+        ix: 40,
+        draw: (g, sy) => {
+          drawText(g, c.name, 86, sy + 8, PAL.yellow, PAL.ink, 2);
+          wrap(c.blurb, 28).slice(0, 2).forEach((l, k) => drawText(g, l, 86, sy + 26 + k * 9, PAL.lgrey));
+        },
+      });
+      y += 46;
+    }
+    const binks = this.add.image(0, 0, 'binks_a').setOrigin(0).setDepth(1).setScale(2);
+    this.rows.push({ y, img: binks, ix: 48, draw: (g, sy) => drawText(g, 'AND BINKS, THE VIZSLA', 86, sy + 8, PAL.orange, PAL.ink) });
+    y += 44;
+    text('MUSIC', PAL.yellow, 1, 12);
+    text('ORIGINAL CHIP AND FM TUNES', PAL.white, 1, 10);
+    text('+ "A BAG OF CHIPS" BY ZANE LITTLE (CC0)', PAL.white, 1, 26);
+    text('FILMED ON LOCATION AT', PAL.yellow, 1, 12);
+    text('BROWNBER HALL, CUMBRIA', PAL.white, 1, 30);
+    text('NO ZOMBIES WERE HARMED.', PAL.lgrey, 1, 10);
+    text('SEVERAL PORK PIES WERE.', PAL.lgrey, 1, 40);
+    text('THANKS FOR PLAYING!', PAL.lime, 2, 30);
+    this.end = y + 40;
+  }
+
+  private end = 0;
+
+  update() {
+    this.t++;
+    this.scroll += 0.45;
+    const g = this.g;
+    g.clear();
+    // twinkling stars behind
+    for (let i = 0; i < 40; i++) {
+      g.fillStyle((this.t + i * 13) % 90 < 6 ? PAL.yellow : PAL.slate, 1);
+      g.fillRect((i * 97) % W, (i * 53 + Math.floor(this.scroll * 0.2)) % 192, 1, 1);
+    }
+    for (const r of this.rows) {
+      const sy = Math.round(r.y - this.scroll);
+      const on = sy > -60 && sy < 200;
+      if (r.img) r.img.setVisible(on).setPosition(r.ix ?? 40, sy);
+      if (on) r.draw(g, sy);
+    }
+    if (this.t > 60 && (input.takeJump() || input.takeTalk())) return this.scene.start('title');
+    if (this.scroll > this.end) this.scene.start('title');
   }
 }

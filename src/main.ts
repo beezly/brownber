@@ -1,5 +1,5 @@
 import Phaser from './phaser';
-import { BootScene, TitleScene, SelectScene } from './MenuScenes';
+import { BootScene, TitleScene, SelectScene, CreditsScene } from './MenuScenes';
 import { GameScene } from './GameScene';
 import { input } from './input';
 import { initFullscreen } from './fullscreen';
@@ -49,7 +49,7 @@ const game = new Phaser.Game({
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
   input: { activePointers: 3 },
-  scene: [BootScene, TitleScene, SelectScene, GameScene],
+  scene: [BootScene, TitleScene, SelectScene, GameScene, CreditsScene],
 });
 
 // Dev-only hook for testing in the browser console.

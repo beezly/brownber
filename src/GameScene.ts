@@ -169,7 +169,6 @@ export class GameScene extends Phaser.Scene {
   private deaths = 0;
   private pending: SaveData | null = null;
   private lastSave = 0;
-  private pitNag = -9999;
   private finale: {
     t: number;
     fire: { c: number; r: number }[];
@@ -1022,6 +1021,10 @@ export class GameScene extends Phaser.Scene {
         this.startTalk(n);
         return;
       }
+      if (this.nearFirePit()) {
+        this.lightFirePit();
+        return;
+      }
     }
 
     if (input.takeAbility()) {
@@ -1133,7 +1136,6 @@ export class GameScene extends Phaser.Scene {
         }
       }
       if (this.grounded) this.maybeCheckpoint(sup);
-      if (this.grounded && sup.some((t) => t.ch === 'O')) this.atFirePit();
     } else if (this.coyote > 0) {
       this.coyote--;
     }
@@ -1781,16 +1783,34 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ------------------------------------------------------------------ finale
-  private atFirePit() {
-    if (this.state !== 'play') return;
+  /** The fire pit tiles in this room, if any. */
+  private firePitTiles() {
+    const out: { c: number; r: number }[] = [];
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (this.tiles[r][c] === 'O') out.push({ c, r });
+    return out;
+  }
+
+  /** Standing on the fire pit, or right beside it on the ground. */
+  private nearFirePit() {
+    if (this.state !== 'play' || !this.grounded) return false;
+    const pit = this.firePitTiles();
+    if (!pit.length) return false;
+    const x0 = Math.min(...pit.map((p) => p.c)) * T - 12;
+    const x1 = (Math.max(...pit.map((p) => p.c)) + 1) * T + 12;
+    const cx = this.px + PW / 2;
+    const feet = this.py + PH;
+    return cx > x0 && cx < x1 && Math.abs(feet - pit[0].r * T) <= 9;
+  }
+
+  /** Press TALK at the fire pit: strike Maffa's lighter (if you have it). */
+  private lightFirePit() {
     if (!this.hasLighter) {
-      if (this.frame - this.pitNag > 240) {
-        this.pitNag = this.frame;
-        this.say(this.hero.id === 'maffa' ? 'WHERE IS MY LIGHTER?!' : "NEED MAFFA'S LIGHTER TO LIGHT IT!", 150);
-        sfx.blip(200);
-      }
+      this.say(this.hero.id === 'maffa' ? 'WHERE IS MY LIGHTER?!' : "NO LIGHTER! FIND MAFFA'S LIGHTER FIRST", 150);
+      sfx.blip(200);
       return;
     }
+    this.say('CLICK... FWOOSH!', 90);
+    for (const p of this.firePitTiles()) this.burst(p.c * T + 4, p.r * T - 2, PAL.orange, 'dot', 6);
     this.startFinale();
   }
 
@@ -2829,6 +2849,14 @@ export class GameScene extends Phaser.Scene {
       if (gu.def.kind === 'binks' && gu.woof > 0) {
         drawText(g, 'WOOF!', Math.round(gu.x - 6), Math.round(gu.y - 30), PAL.yellow, PAL.ink);
       }
+    }
+    if (this.state === 'play' && this.dying === 0 && !this.nearNpc() && this.nearFirePit()) {
+      const pit = this.firePitTiles();
+      const cx = ((Math.min(...pit.map((p) => p.c)) + Math.max(...pit.map((p) => p.c)) + 1) * T) / 2;
+      const bob = Math.floor(this.frame / 15) % 2;
+      const k = keyName('talk');
+      const msg = this.hasLighter ? `${k}: LIGHT THE FIRE` : 'NEED THE LIGHTER';
+      drawTextCentered(g, msg, cx, pit[0].r * T - 30 - bob, this.hasLighter ? PAL.yellow : PAL.red, PAL.ink);
     }
     if (this.state === 'play' && this.dying === 0) {
       const n = this.nearNpc();

@@ -221,7 +221,12 @@ export class GameScene extends Phaser.Scene {
 
   create() {
     document.body.classList.add('ingame');
-    this.events.once('shutdown', () => document.body.classList.remove('ingame'));
+    const saveNow = () => this.save();
+    window.addEventListener('bb-save-now', saveNow);
+    this.events.once('shutdown', () => {
+      document.body.classList.remove('ingame');
+      window.removeEventListener('bb-save-now', saveNow);
+    });
     this.cameras.main.setBackgroundColor(PAL.ink);
     this.roomImg = this.add.image(0, 0, '__DEFAULT').setOrigin(0).setDepth(0);
     this.dyn = this.add.graphics().setDepth(1);

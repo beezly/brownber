@@ -145,3 +145,21 @@ body.ingame #btn-map { display: block; }
   color: #f4f4f4;
   font-size: 13px;
 }
+
+/* ---------- new version available (shown mid-game) ---------- */
+#update {
+  position: fixed;
+  top: calc(8px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 13;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 2px solid #a7f070;
+  background: rgba(26, 28, 44, 0.92);
+  color: #a7f070;
+  font: bold 12px ui-monospace, Menlo, monospace;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+#update[hidden] { display: none; }

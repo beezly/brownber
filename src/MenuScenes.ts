@@ -8,6 +8,7 @@ import { input } from './input';
 import { sfx } from './sound';
 import { playMusic } from './music';
 import { loadSave, type SaveData } from './save';
+import { BUILD_ID } from './update';
 
 const W = 256;
 
@@ -128,6 +129,7 @@ export class TitleScene extends Phaser.Scene {
     drawTextCentered(g, 'BROWNBER', W / 2, 18, PAL.yellow, PAL.red, 3);
     drawTextCentered(g, 'BUDDIES', W / 2, 46, PAL.white, PAL.blue, 3);
     drawTextCentered(g, 'A WEEKEND AT THE HALL', W / 2, 76, PAL.lgrey);
+    drawText(g, `V ${BUILD_ID.split('-')[0]}`, 2, 2, PAL.slate);
 
     const m = this.mode === 'cosy' ? '< COSY: NO DEATHS >' : '< CLASSIC: 5 LIVES >';
     g.fillStyle(PAL.ink, 0.7);

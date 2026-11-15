@@ -3,6 +3,7 @@ import { BootScene, TitleScene, SelectScene } from './MenuScenes';
 import { GameScene } from './GameScene';
 import { input } from './input';
 import { initFullscreen } from './fullscreen';
+import { initUpdates } from './update';
 import { unlockAudio as unlockSfx, isMuted, setMuted } from './sound';
 import { refreshMusic } from './music';
 
@@ -13,6 +14,7 @@ const unlockAudio = () => {
 
 input.init();
 initFullscreen();
+initUpdates();
 
 // Browsers only allow sound after the first tap or key press.
 input.onFirstInteraction = unlockAudio;

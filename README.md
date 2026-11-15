@@ -68,4 +68,6 @@ This outputs a static site in `dist/` that can be hosted anywhere.
 
 Every push to `main` builds the game and deploys it to GitHub Pages automatically (`.github/workflows/deploy.yml`). It's live at **https://beez.ly/brownber/** a minute or two later.
 
+Installed copies (Add to Home Screen) update themselves. Each build writes a `version.json`. The game checks it whenever it's opened or brought back to the foreground: on the title screen it reloads straight away, and mid-game it shows an UPDATE button that saves first. The build id appears in the top-left corner of the title screen.
+
 `npm run deploy` is still there as a manual fallback. It pushes a build to the `gh-pages` branch, but Pages only serves that branch if you switch the Pages source back to "Deploy from a branch".

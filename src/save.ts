@@ -19,6 +19,7 @@ export interface SaveData {
   held?: string[];
   torch?: boolean;
   bites?: number;
+  art?: string[]; // Art Trail pieces found
 }
 
 const KEY = 'bb-save';

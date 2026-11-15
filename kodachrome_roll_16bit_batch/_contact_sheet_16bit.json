@@ -1,0 +1,103 @@
+{
+  "meta": {
+    "app": "KODACHROME 8/16 LAB",
+    "mode": "16bit",
+    "format": "RGBA8888",
+    "size": {
+      "w": 928,
+      "h": 158
+    }
+  },
+  "frames": {
+    "art_01_img_8333": {
+      "role": "prop",
+      "bitDepth": "16bit",
+      "frame": {
+        "x": 4,
+        "y": 4,
+        "w": 96,
+        "h": 150
+      }
+    },
+    "art_02_img_8332": {
+      "role": "prop",
+      "bitDepth": "16bit",
+      "frame": {
+        "x": 104,
+        "y": 4,
+        "w": 96,
+        "h": 120
+      }
+    },
+    "art_03_img_8331": {
+      "role": "prop",
+      "bitDepth": "16bit",
+      "frame": {
+        "x": 204,
+        "y": 4,
+        "w": 96,
+        "h": 114
+      }
+    },
+    "art_04_img_8329": {
+      "role": "prop",
+      "bitDepth": "16bit",
+      "frame": {
+        "x": 304,
+        "y": 4,
+        "w": 96,
+        "h": 130
+      }
+    },
+    "art_05_img_8325": {
+      "role": "collectible",
+      "bitDepth": "16bit",
+      "frame": {
+        "x": 404,
+        "y": 4,
+        "w": 102,
+        "h": 77
+      }
+    },
+    "art_06_img_8324": {
+      "role": "prop",
+      "bitDepth": "16bit",
+      "frame": {
+        "x": 510,
+        "y": 4,
+        "w": 96,
+        "h": 126
+      }
+    },
+    "art_07_img_8323": {
+      "role": "collectible",
+      "bitDepth": "16bit",
+      "frame": {
+        "x": 610,
+        "y": 4,
+        "w": 102,
+        "h": 74
+      }
+    },
+    "art_08_img_8322": {
+      "role": "collectible",
+      "bitDepth": "16bit",
+      "frame": {
+        "x": 716,
+        "y": 4,
+        "w": 102,
+        "h": 106
+      }
+    },
+    "art_09_img_8334": {
+      "role": "collectible",
+      "bitDepth": "16bit",
+      "frame": {
+        "x": 822,
+        "y": 4,
+        "w": 102,
+        "h": 101
+      }
+    }
+  }
+}

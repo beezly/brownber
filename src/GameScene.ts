@@ -12,6 +12,7 @@ import { CHARACTERS } from './characters';
 import { is16 } from './settings';
 import { darken, lighten, mix } from './colour';
 import { addLegend } from './legends';
+import { ART_TRAIL, WALL_ART } from './art';
 import { CURES, CURED_LINES, ZOMBIE_DAWN, ZOMBIE_ITEM_OVERRIDES, ZOMBIE_START } from './zombie';
 
 /** Zombie-mode sounds come from the audio module; call them only if they exist. */
@@ -163,6 +164,11 @@ export class GameScene extends Phaser.Scene {
   private roomT = 0;
   private legendDawn = false; // frame you entered the room (zombies give you a moment)
   private dark!: Phaser.GameObjects.Graphics;
+  // the Art Trail
+  private artFound = new Set<string>();
+  private artObjs: Phaser.GameObjects.Image[] = [];
+  private trail: { key: string; title: string; x: number; y: number; img: Phaser.GameObjects.Image }[] = [];
+  private artPopup: { img: Phaser.GameObjects.Image; title: string; t: number } | null = null;
   private talked = new Set<string>();
   private visited = new Set<string>();
   private hasLighter = false;
@@ -231,6 +237,8 @@ export class GameScene extends Phaser.Scene {
     this.talked = new Set();
     this.visited = new Set();
     this.zombies = [];
+    this.artFound = new Set();
+    this.artPopup = null;
     this.cured = new Set();
     this.held = new Set();
     this.hasTorch = false;
@@ -307,6 +315,7 @@ export class GameScene extends Phaser.Scene {
       // carry on from the save
       sv.collected.forEach((k) => this.collected.add(k));
       (sv.cured ?? []).forEach((k) => this.cured.add(k));
+      (sv.art ?? []).forEach((k) => this.artFound.add(k));
       (sv.held ?? []).forEach((k) => this.held.add(k));
       this.hasTorch = !!sv.torch;
       this.bites = sv.bites ?? 0;
@@ -343,6 +352,7 @@ export class GameScene extends Phaser.Scene {
       y: this.checkpoint.y,
       collected: [...this.collected],
       cured: [...this.cured],
+      art: [...this.artFound],
       held: [...this.held],
       torch: this.hasTorch,
       bites: this.bites,
@@ -378,6 +388,7 @@ export class GameScene extends Phaser.Scene {
     this.items = [];
     this.guardians = [];
     this.npcs = [];
+    this.placeArt(id);
 
     let itemIdx = 0;
     let npcIdx = 0;
@@ -993,6 +1004,10 @@ export class GameScene extends Phaser.Scene {
     this.stepGuardians();
     this.stepZombies();
     this.stepParticles();
+    if (this.artPopup && --this.artPopup.t <= 0) {
+      this.artPopup.img.destroy();
+      this.artPopup = null;
+    }
 
     if (this.dying > 0) {
       this.dying--;
@@ -1406,6 +1421,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    this.checkArtTrail(overlap);
     if (this.zombieContact()) return;
 
     // hazard tiles
@@ -1508,6 +1524,45 @@ export class GameScene extends Phaser.Scene {
       bubble,
       want,
     });
+  }
+
+  // ------------------------------------------------------------------ art
+  private artTex(name: string) {
+    const k16 = `art_${name}_16`;
+    const k8 = `art_${name}_8`;
+    return is16() && this.textures.exists(k16) ? k16 : this.textures.exists(k8) ? k8 : k16;
+  }
+
+  /** Hang this room's pictures and lay out any Art Trail pieces not yet found. */
+  private placeArt(roomId: string) {
+    for (const o of this.artObjs) o.destroy();
+    for (const p of this.trail) p.img.destroy();
+    this.artObjs = [];
+    this.trail = [];
+    for (const a of WALL_ART[roomId] ?? []) {
+      const img = this.add.image(a.x, a.y, this.artTex(`wall_${a.key}`)).setOrigin(0.5, 0).setDepth(0.5);
+      this.artObjs.push(img);
+    }
+    for (const a of ART_TRAIL) {
+      if (a.room !== roomId || this.artFound.has(a.key)) continue;
+      const img = this.add.image(a.x, a.y, this.artTex(`trail_${a.key}_icon`)).setOrigin(0).setDepth(2);
+      this.trail.push({ key: a.key, title: a.title, x: a.x, y: a.y, img });
+    }
+  }
+
+  private checkArtTrail(overlap: (x: number, y: number, w: number, h: number) => boolean) {
+    for (const p of [...this.trail]) {
+      if (!overlap(p.x, p.y, p.img.width, p.img.height)) continue;
+      this.artFound.add(p.key);
+      p.img.destroy();
+      this.trail = this.trail.filter((q) => q !== p);
+      sfx.win();
+      this.burst(p.x + 8, p.y + 6, PAL.yellow, 'dot', 12);
+      this.artPopup?.img.destroy();
+      const img = this.add.image(RW / 2, 74, this.artTex(`trail_${p.key}_full`)).setDepth(12.5);
+      this.artPopup = { img, title: p.title, t: 210 };
+      this.save();
+    }
   }
 
   /** Static light sources in the room: fire, the coffee machine, the fire pit. */
@@ -2121,6 +2176,7 @@ export class GameScene extends Phaser.Scene {
       if (held.length) drawText(g, `CARRYING: ${held.join(', ').toUpperCase()}`.slice(0, 41), 4, RH - 27, PAL.white);
     } else drawText(g, `* FRIENDS MET ${[...this.talked].filter((t) => t !== this.hero.id).length}/${friends}`, 100, RH - 18, PAL.lime);
     drawText(g, this.hasLighter ? 'LIGHTER: FOUND!' : 'LIGHTER: MISSING', 4, RH - 9, this.hasLighter ? PAL.orange : PAL.red);
+    drawText(g, `ART ${this.artFound.size}/${ART_TRAIL.length}`, 100, RH - 9, PAL.yellow);
     if (Math.floor(this.frame / 30) % 2) {
       const closeTxt = `${keyName('map')} TO CLOSE`;
       drawText(g, closeTxt, RW - 2 - closeTxt.length * 6, RH - 9, PAL.lgrey);
@@ -2821,6 +2877,14 @@ export class GameScene extends Phaser.Scene {
         g.fillRect(x + 2, y - 4, 1, 1);
       } else g.fillRect(x, y, 1, 1);
     }
+    // Art Trail pieces glint gold
+    for (const p of this.trail) {
+      if ((this.frame + p.x) % 70 < 12) {
+        g.fillStyle(PAL.yellow, 1);
+        g.fillRect(p.x - 1, p.y - 1, 3, 1);
+        g.fillRect(p.x, p.y - 2, 1, 3);
+      }
+    }
     // items twinkle so they stand out against busy wallpaper
     for (const it of this.items) {
       const p = (this.frame + it.idx * 17) % 60;
@@ -2952,6 +3016,21 @@ export class GameScene extends Phaser.Scene {
   private drawUi() {
     const g = this.ui;
     g.clear();
+    if (this.artPopup && this.state === 'play') {
+      // a found piece of the Hall's art, shown big for a moment
+      const im = this.artPopup.img;
+      const w = im.width + 10;
+      const h = im.height + 28;
+      const x = Math.round(RW / 2 - w / 2);
+      const y = Math.round(74 - im.height / 2 - 14);
+      g.fillStyle(PAL.ink, 0.94);
+      g.fillRect(x, y, w, h);
+      g.lineStyle(1, PAL.yellow, 1);
+      g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      drawTextCentered(g, `ART TRAIL ${this.artFound.size}/${ART_TRAIL.length}`, RW / 2, y + 3, PAL.yellow);
+      drawTextCentered(g, this.artPopup.title, RW / 2, y + h - 10, PAL.white);
+      im.setVisible(true);
+    } else if (this.artPopup) this.artPopup.img.setVisible(false);
     if (this.state === 'talk' && this.talk) {
       const t = this.talk;
       g.fillStyle(PAL.ink, 0.92);

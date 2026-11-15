@@ -16,6 +16,7 @@ type Mode = 'cosy' | 'classic' | 'zombie';
 const MODES: Mode[] = ['cosy', 'classic', 'zombie'];
 import { BUILD_ID } from './update';
 import { getLegends } from './legends';
+import { artFiles } from './art';
 
 const W = 256;
 
@@ -25,6 +26,10 @@ export class BootScene extends Phaser.Scene {
   }
   preload() {
     for (const c of CHARACTERS) if (c.portrait) this.load.image(`portrait_${c.id}`, `portraits/${c.portrait}.png`);
+    for (const f of artFiles()) {
+      this.load.image(`art_${f}_16`, `art/${f}_16.png`);
+      this.load.image(`art_${f}_8`, `art/${f}_8.png`);
+    }
     this.load.on('loaderror', () => {
       /* a missing portrait just falls back to the sprite */
     });

@@ -7,6 +7,7 @@ import { drawText, drawTextCentered, wrap } from './font';
 import { input } from './input';
 import { sfx } from './sound';
 import { playMusic } from './music';
+import { loadSave, type SaveData } from './save';
 
 const W = 256;
 
@@ -49,7 +50,9 @@ export class TitleScene extends Phaser.Scene {
     this.g = this.add.graphics();
     this.binks = this.add.image(-20, 150, 'binks_a').setOrigin(0, 1);
     input.clearLatches();
+    this.save = loadSave();
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
+      if (this.save && p.y < 120) return this.cont();
       if (p.y > 120 && p.y < 140) {
         this.toggleMode();
       } else {
@@ -68,6 +71,13 @@ export class TitleScene extends Phaser.Scene {
     sfx.select();
   }
 
+  private save: SaveData | null = null;
+
+  private cont() {
+    sfx.select();
+    this.scene.start('game', { cont: true, hero: this.save!.hero, mode: this.save!.mode });
+  }
+
   private go() {
     sfx.select();
     this.scene.start('select', { mode: this.mode });
@@ -76,7 +86,10 @@ export class TitleScene extends Phaser.Scene {
   update() {
     this.t++;
     if (input.takeLeft() || input.takeRight()) this.toggleMode();
-    if (input.takeJump() || input.takeTalk()) return this.go();
+    if (this.save) {
+      if (input.takeJump()) return this.cont();
+      if (input.takeTalk()) return this.go();
+    } else if (input.takeJump() || input.takeTalk()) return this.go();
 
     const g = this.g;
     g.clear();
@@ -120,7 +133,14 @@ export class TitleScene extends Phaser.Scene {
     g.fillStyle(PAL.ink, 0.7);
     g.fillRect(W / 2 - 64, 160, 128, 30);
     drawTextCentered(g, m, W / 2, 163, this.mode === 'cosy' ? PAL.lime : PAL.orange);
-    if (Math.floor(this.t / 30) % 2) drawTextCentered(g, 'PRESS JUMP', W / 2, 177, PAL.white);
+    if (this.save) {
+      const name = charById(this.save.hero).name.toUpperCase();
+      g.fillStyle(PAL.ink, 0.7);
+      g.fillRect(W / 2 - 92, 86, 184, 22);
+      drawTextCentered(g, `JUMP: CONTINUE AS ${name}`, W / 2, 88, Math.floor(this.t / 30) % 2 ? PAL.yellow : PAL.white);
+      drawTextCentered(g, 'TALK: NEW GAME', W / 2, 98, PAL.lgrey);
+      drawTextCentered(g, 'NEW GAME', W / 2, 177, PAL.lgrey);
+    } else if (Math.floor(this.t / 30) % 2) drawTextCentered(g, 'PRESS JUMP', W / 2, 177, PAL.white);
 
     // Binks zooms across
     this.bx += 2.2;

@@ -7,6 +7,8 @@ import { input } from './input';
 import { sfx } from './sound';
 import { playMusic, stopMusic } from './music';
 import { ABILITIES, type AbilityDef, type AbilityId } from './abilities';
+import { loadSave, writeSave, clearSave, type SaveData } from './save';
+import { CHARACTERS } from './characters';
 
 // ---- world constants ----
 const T = 8;
@@ -59,6 +61,7 @@ interface Npc {
   sprite: Phaser.GameObjects.Image;
   lines: string[];
   pose?: 'lying';
+  custom?: boolean; // lines written specially for the friend you're playing
 }
 
 interface Line {
@@ -122,7 +125,23 @@ export class GameScene extends Phaser.Scene {
   private clock = 16 * 60;
   private frame = 0;
   private acc = 0;
-  private state: 'play' | 'talk' | 'won' | 'over' = 'play';
+  private state: 'play' | 'talk' | 'won' | 'over' | 'map' | 'finale' = 'play';
+  private talked = new Set<string>();
+  private visited = new Set<string>();
+  private hasLighter = false;
+  private deaths = 0;
+  private pending: SaveData | null = null;
+  private lastSave = 0;
+  private pitNag = -9999;
+  private finale: {
+    t: number;
+    fire: { c: number; r: number }[];
+    friends: { def: CharDef; sprite: Phaser.GameObjects.Image; x: number; tx: number; y: number; delay: number }[];
+    title: string;
+    lines: string[];
+    star: boolean;
+    textAt: number;
+  } | null = null;
   private overText: string[] = [];
 
   // display
@@ -165,9 +184,17 @@ export class GameScene extends Phaser.Scene {
     super('game');
   }
 
-  init(data: { hero: string; mode: Mode }) {
-    this.hero = charById(data.hero ?? 'beez');
-    this.mode = data.mode ?? 'cosy';
+  init(data: { hero: string; mode: Mode; cont?: boolean }) {
+    this.pending = data.cont ? loadSave() : null;
+    if (!data.cont) clearSave();
+    this.hero = charById(this.pending?.hero ?? data.hero ?? 'beez');
+    this.mode = this.pending?.mode ?? data.mode ?? 'cosy';
+    this.talked = new Set();
+    this.visited = new Set();
+    this.hasLighter = false;
+    this.deaths = 0;
+    this.lastSave = 0;
+    this.finale = null;
     this.lives = 5;
     this.collected.clear();
     this.clock = 16 * 60;
@@ -193,6 +220,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   create() {
+    document.body.classList.add('ingame');
+    this.events.once('shutdown', () => document.body.classList.remove('ingame'));
     this.cameras.main.setBackgroundColor(PAL.ink);
     this.roomImg = this.add.image(0, 0, '__DEFAULT').setOrigin(0).setDepth(0);
     this.dyn = this.add.graphics().setDepth(1);
@@ -217,17 +246,56 @@ export class GameScene extends Phaser.Scene {
         sy = (r + 1) * T - PH;
       }
     });
-    this.loadRoom(START_ROOM);
+    const sv = this.pending;
+    if (sv && ROOMS[sv.room]) {
+      // carry on from the save
+      sv.collected.forEach((k) => this.collected.add(k));
+      sv.talked.forEach((k) => this.talked.add(k));
+      sv.visited.forEach((k) => this.visited.add(k));
+      this.clock = sv.clock;
+      this.lives = sv.lives;
+      this.hasLighter = sv.lighter;
+      this.deaths = sv.deaths;
+      sx = sv.x;
+      sy = sv.y;
+      this.loadRoom(sv.room);
+      this.checkpoint = { room: sv.room, x: sx, y: sy };
+      this.say(`WELCOME BACK, ${this.hero.name.toUpperCase()}!`, 120);
+    } else {
+      this.loadRoom(START_ROOM);
+      this.checkpoint = { room: START_ROOM, x: sx, y: sy };
+    }
     this.px = sx;
     this.py = sy;
-    this.checkpoint = { room: START_ROOM, x: sx, y: sy };
+    this.pending = null;
     input.clearLatches();
+  }
+
+  private save() {
+    if (this.state === 'finale' || this.state === 'won' || this.state === 'over') return;
+    this.lastSave = this.frame;
+    writeSave({
+      v: 1,
+      hero: this.hero.id,
+      mode: this.mode,
+      room: this.checkpoint.room,
+      x: this.checkpoint.x,
+      y: this.checkpoint.y,
+      collected: [...this.collected],
+      talked: [...this.talked],
+      visited: [...this.visited],
+      clock: this.clock,
+      lives: this.lives,
+      lighter: this.hasLighter,
+      deaths: this.deaths,
+    });
   }
 
   // ------------------------------------------------------------------ rooms
   private loadRoom(id: string) {
     const room = ROOMS[id];
     this.room = room;
+    this.visited.add(id);
     playMusic(room.music ?? 'house');
     this.tiles = room.map.map((row) => row.padEnd(COLS, '.').slice(0, COLS).split(''));
     this.crumble.clear();
@@ -260,8 +328,9 @@ export class GameScene extends Phaser.Scene {
           if (!spec || spec.id === this.hero.id) continue; // you can't meet yourself
           const def = charById(spec.id);
           const sprite = this.add.image(c * T + 4, (r + 1) * T, `${def.id}_idle`).setOrigin(0.5, 1).setDepth(3);
-          const lines = spec.byHero?.[this.hero.id] ?? spec.lines;
-          this.npcs.push({ def, x: c * T + 4, y: (r + 1) * T, sprite, lines, pose: spec.pose });
+          const custom = spec.byHero?.[this.hero.id];
+          const lines = custom ?? spec.lines;
+          this.npcs.push({ def, x: c * T + 4, y: (r + 1) * T, sprite, lines, pose: spec.pose, custom: !!custom });
         } else if (ch === 'C') {
           this.crumble.set(`${c},${r}`, CRUMBLE_HP);
         } else if (ch === '~') {
@@ -419,6 +488,22 @@ export class GameScene extends Phaser.Scene {
         break;
       }
       case 'X': {
+        if (this.room.id === 'bathroom') {
+          // a roll-top bath: white tub, curled rim, clawed feet
+          const top = this.tile(c, r - 1) !== 'X';
+          const bottom = this.tile(c, r + 1) !== 'X';
+          g.fillStyle(PAL.white, 1);
+          g.fillRect(x, y + (top ? 2 : 0), T, bottom ? 5 : T);
+          g.fillStyle(PAL.lgrey, 1);
+          if (top) g.fillRect(x, y + 1, T, 2);
+          if (this.tile(c - 1, r) !== 'X') g.fillRect(x, y + (top ? 2 : 0), 1, bottom ? 5 : T);
+          if (this.tile(c + 1, r) !== 'X') g.fillRect(x + 7, y + (top ? 2 : 0), 1, bottom ? 5 : T);
+          if (bottom && (this.tile(c - 1, r) !== 'X' || this.tile(c + 1, r) !== 'X')) {
+            g.fillStyle(PAL.yellow, 1);
+            g.fillRect(x + 3, y + 7, 2, 1);
+          }
+          break;
+        }
         g.fillStyle(PAL.white, 1);
         g.fillRect(x, y, T, T);
         g.fillStyle(PAL.lgrey, 1);
@@ -534,6 +619,14 @@ export class GameScene extends Phaser.Scene {
   private step() {
     this.frame++;
     if (this.state === 'talk') return this.stepTalk();
+    if (this.state === 'finale') return this.stepFinale();
+    if (this.state === 'map') {
+      if (input.takeMap() || input.takeJump() || input.takeTalk()) {
+        this.state = 'play';
+        input.clearLatches();
+      }
+      return;
+    }
     if (this.state === 'won' || this.state === 'over') {
       if ((input.takeJump() || input.takeTalk()) && this.frame > 30) this.scene.start('title');
       return;
@@ -580,6 +673,12 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (input.takeAbility()) this.useAbility();
+    if (input.takeMap()) {
+      this.state = 'map';
+      input.clearLatches();
+      sfx.select();
+      return;
+    }
     if (this.lying) {
       // getting up: jump or walk
       if (this.buffer > 0 || dir !== 0) {
@@ -665,6 +764,7 @@ export class GameScene extends Phaser.Scene {
         }
       }
       if (this.grounded) this.maybeCheckpoint(sup);
+      if (this.grounded && sup.some((t) => t.ch === 'O')) this.atFirePit();
     } else if (this.coyote > 0) {
       this.coyote--;
     }
@@ -773,7 +873,9 @@ export class GameScene extends Phaser.Scene {
     for (const g of this.guardians) {
       if (Math.abs(g.x + 8 - (this.px + 4)) < 40 && Math.abs(g.y - this.py) < 40) return;
     }
+    const moved = this.checkpoint.room !== this.room.id;
     this.checkpoint = { room: this.room.id, x: this.px, y: this.py };
+    if (moved || this.frame - this.lastSave > 600) this.save();
   }
 
   private die() {
@@ -798,6 +900,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private respawn() {
+    this.deaths++;
     if (this.mode === 'classic') {
       this.lives--;
       if (this.lives <= 0) {
@@ -986,18 +1089,248 @@ export class GameScene extends Phaser.Scene {
     sfx.collect();
     this.burst(it.x + 4, it.y + 4, PAL.yellow, 'dot', 6);
     if (it.key === 'lighter') {
-      this.say(this.hero.id === 'maffa' ? 'YOUR LIGHTER! PHEW.' : "MAFFA'S LIGHTER! FIRE PIT: ON");
+      this.hasLighter = true;
+      this.say(this.hero.id === 'maffa' ? 'YOUR LIGHTER! NOW TO THE FIRE PIT' : "MAFFA'S LIGHTER! NOW: THE FIRE PIT");
       sfx.win();
     } else if (this.hero.id === 'maffa' && (it.key === 'porkpie' || it.key === 'milk')) {
       this.say(it.key === 'porkpie' ? 'A PORK PIE! MAFFA APPROVES.' : 'GLASS OF MILK! LOVELY.');
     }
     if (this.collected.size >= TOTAL_ITEMS) {
       sfx.win();
-      this.endGame(
-        [`ALL ${TOTAL_ITEMS} PARTY BITS FOUND!`, "AND MAFFA'S LIGHTER IS BACK.", '', 'THE FIRE PIT CAN BE LIT...', 'AS SOON AS THE REST OF', 'BROWNBER HALL IS BUILT!', '', 'PRESS JUMP'],
-        'won',
-      );
+      this.say('ALL PARTY BITS FOUND! TO THE FIRE PIT!', 200);
     }
+    this.save();
+  }
+
+  // ------------------------------------------------------------------ finale
+  private atFirePit() {
+    if (this.state !== 'play') return;
+    if (!this.hasLighter) {
+      if (this.frame - this.pitNag > 240) {
+        this.pitNag = this.frame;
+        this.say(this.hero.id === 'maffa' ? 'WHERE IS MY LIGHTER?!' : "NEED MAFFA'S LIGHTER TO LIGHT IT!", 150);
+        sfx.blip(200);
+      }
+      return;
+    }
+    this.startFinale();
+  }
+
+  private startFinale() {
+    clearSave();
+    this.state = 'finale';
+    this.vx = this.vy = 0;
+    this.lying = false;
+    this.laser = this.pint = this.hint = null;
+    this.toast = null;
+    playMusic('victory');
+    sfx.win();
+    for (const g of this.guardians) g.sprite.setVisible(g.def.kind === 'binks');
+    for (const n of this.npcs) n.sprite.setVisible(false);
+
+    const fire: { c: number; r: number }[] = [];
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (this.tiles[r][c] === 'O') fire.push({ c, r });
+    const fx0 = Math.min(...fire.map((f) => f.c)) * T;
+    const fx1 = (Math.max(...fire.map((f) => f.c)) + 1) * T;
+    const fireRow = fire[0].r;
+    const centre = (fx0 + fx1) / 2;
+
+    // the hero steps back from the fire
+    this.px = fx0 - 14 - PW / 2;
+    this.py = this.footY(this.px + PW / 2, fireRow) - PH;
+    this.facing = 1;
+
+    // everyone you talked to comes to the fire; Beth is always last (and 45 minutes late)
+    const ids = CHARACTERS.map((c) => c.id).filter((id) => id !== this.hero.id && this.talked.has(id));
+    ids.sort((a, b) => (a === 'beth' ? 1 : b === 'beth' ? -1 : 0));
+    const slots: number[] = [];
+    for (let k = 1; slots.length < ids.length && k < 20; k++) {
+      for (const side of [1, -1]) {
+        const x = centre + side * (fx1 - fx0) / 2 + side * (k * 13 + 4);
+        if (x > 10 && x < RW - 10 && Math.abs(x - (this.px + PW / 2)) > 8) slots.push(x);
+      }
+    }
+    const friends = ids.map((id, i) => {
+      const def = charById(id);
+      const tx = slots[i] ?? centre + 20;
+      const sprite = this.add.image(-12, 0, `${id}_idle`).setOrigin(0.5, 1).setDepth(4);
+      const delay = 30 + i * 28 + (id === 'beth' ? 120 : 0);
+      return { def, sprite, x: -12, tx, y: this.footY(tx, fireRow), delay };
+    });
+
+    const n = friends.length;
+    const pct = this.collected.size / TOTAL_ITEMS;
+    let title: string;
+    let lines: string[];
+    let star = false;
+    if (n >= 10 && pct >= 0.75) {
+      title = 'THE PERFECT NIGHT';
+      lines = ['THE WHOLE GANG IS HERE. THE FIRE ROARS,', 'AND A SHOOTING STAR CROSSES THE HOWGILLS.'];
+      star = true;
+    } else if (n >= 6) {
+      title = 'A GRAND NIGHT';
+      lines = ['MOST OF THE GANG MADE IT.', 'STORIES, SONGS AND TOASTED MARSHMALLOWS.'];
+    } else if (n >= 2) {
+      title = 'A COSY NIGHT';
+      lines = ['A FEW FRIENDS AND A WARM FIRE.', 'TALK TO MORE FRIENDS NEXT TIME!'];
+    } else {
+      title = 'A QUIET NIGHT';
+      lines = ['JUST YOU, THE FIRE AND THE STARS.', 'TALK TO YOUR FRIENDS SO THEY COME TOO!'];
+    }
+    lines.push('', `FRIENDS ${n}/${CHARACTERS.length - 1}   ITEMS ${this.collected.size}/${TOTAL_ITEMS}`, `LIT AT ${this.timeString()}   TUMBLES ${this.deaths}`);
+    const lastArrive = friends.reduce((m, f) => Math.max(m, f.delay + Math.abs(f.tx + 12) / 1.4), 60);
+    this.finale = { t: 0, fire, friends, title, lines, star, textAt: Math.min(lastArrive + 40, 900) };
+    input.clearLatches();
+  }
+
+  /** The y of the ground under x, searching down from row r0. */
+  private footY(x: number, r0: number) {
+    const c = Phaser.Math.Clamp(Math.floor(x / T), 0, COLS - 1);
+    for (let r = Math.max(0, r0); r < ROWS; r++) if (isSupport(this.tile(c, r)) && this.tile(c, r) !== 'O') return r * T;
+    return (r0 + 1) * T;
+  }
+
+  private stepFinale() {
+    const f = this.finale!;
+    f.t++;
+    this.stepGuardians();
+    this.stepParticles();
+    for (const fr of f.friends) {
+      if (f.t < fr.delay) continue;
+      if (Math.abs(fr.x - fr.tx) > 1.4) {
+        fr.x += Math.sign(fr.tx - fr.x) * 1.4;
+        fr.sprite.setTexture(`${fr.def.id}_${Math.floor(f.t / 6) % 2 ? 'run1' : 'run2'}`).setFlipX(fr.tx < fr.x);
+      } else {
+        fr.x = fr.tx;
+        const fireX = (f.fire[0].c * T + (f.fire[f.fire.length - 1].c + 1) * T) / 2;
+        fr.sprite.setTexture(`${fr.def.id}_idle`).setFlipX(fr.x > fireX);
+      }
+      fr.sprite.setPosition(Math.round(fr.x), fr.y);
+      if (fr.def.id === 'beth' && Math.abs(fr.x - fr.tx) < 1.5 && !fr.sprite.getData('said')) {
+        fr.sprite.setData('said', true);
+        this.say('BETH: SORRY! I SAID FIVE MINUTES, DIDN\'T I?', 180);
+      }
+    }
+    // sparks from the fire
+    if (f.t % 4 === 0) {
+      const ft = f.fire[Math.floor(Math.random() * f.fire.length)];
+      this.parts.push({ x: ft.c * T + 4, y: ft.r * T - 4, vx: (Math.random() - 0.5) * 0.6, vy: -0.8 - Math.random(), t: 40, color: Math.random() < 0.5 ? PAL.yellow : PAL.orange, kind: 'dot' });
+    }
+    if (f.t > f.textAt + 30 && (input.takeJump() || input.takeTalk())) this.scene.start('title');
+  }
+
+  private drawFinale(g: Phaser.GameObjects.Graphics) {
+    const f = this.finale!;
+    // the fire
+    for (const ft of f.fire) {
+      const x = ft.c * T;
+      const y = ft.r * T;
+      for (let i = 0; i < 4; i++) {
+        const h = 6 + ((f.t / 3 + i * 5 + ft.c * 3) % 7);
+        g.fillStyle(i % 2 ? PAL.orange : PAL.red, 1);
+        g.fillRect(x + i * 2, y - h + 1, 2, h);
+      }
+      g.fillStyle(PAL.yellow, 1);
+      g.fillRect(x + 2 + (Math.floor(f.t / 5) % 3), y - 4, 2, 4);
+    }
+    // warm glow
+    g.fillStyle(PAL.orange, 0.06 + 0.02 * Math.sin(f.t * 0.2));
+    const cx = (f.fire[0].c * T + (f.fire[f.fire.length - 1].c + 1) * T) / 2;
+    g.fillCircle(cx, f.fire[0].r * T, 60);
+    // shooting star
+    if (f.star && f.t > f.textAt - 60 && f.t < f.textAt + 40) {
+      const k = (f.t - (f.textAt - 60)) / 100;
+      const sx = 30 + k * 200;
+      const sy = 14 + k * 40;
+      for (let i = 0; i < 12; i++) {
+        g.fillStyle(PAL.white, 1 - i / 12);
+        g.fillRect(Math.round(sx - i * 3), Math.round(sy - i * 0.6), 2, 1);
+      }
+    }
+    // the ending card
+    if (f.t >= f.textAt) {
+      const h = 26 + f.lines.length * 10;
+      g.fillStyle(PAL.ink, 0.9);
+      g.fillRect(8, 6, RW - 16, h);
+      g.lineStyle(1, PAL.yellow, 1);
+      g.strokeRect(8.5, 6.5, RW - 17, h - 1);
+      drawTextCentered(g, f.title, RW / 2, 11, PAL.yellow, PAL.red, 2);
+      f.lines.forEach((l, i) => drawTextCentered(g, l, RW / 2, 30 + i * 10, i >= f.lines.length - 2 ? PAL.lime : PAL.white));
+      if (f.t > f.textAt + 30 && Math.floor(f.t / 30) % 2) drawTextCentered(g, 'PRESS JUMP', RW / 2, h + 10, PAL.white, PAL.ink);
+    }
+  }
+
+  // ------------------------------------------------------------------ map screen
+  private drawMap(g: Phaser.GameObjects.Graphics) {
+    g.fillStyle(PAL.ink, 0.96);
+    g.fillRect(0, 0, RW, RH);
+    drawTextCentered(g, `YOU ARE IN: ${this.room.name.replace(/\s*\(.*\)/, '')}`, RW / 2, 4, PAL.yellow, PAL.red);
+    const rooms = Object.values(ROOMS);
+    const xs = rooms.map((r) => r.pos.x);
+    const ys = rooms.map((r) => r.pos.y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const cols = Math.max(...xs) - minX + 1;
+    const rows = Math.max(...ys) - minY + 1;
+    const cw = Math.min(36, Math.floor(248 / cols));
+    const ch = Math.min(32, Math.floor(138 / rows));
+    const ox = Math.floor((RW - cols * cw) / 2);
+    const oy = 16;
+    const cell = (r: RoomDef) => ({ x: ox + (r.pos.x - minX) * cw, y: oy + (r.pos.y - minY) * ch });
+    const known = (id: string) =>
+      this.visited.has(id) || Object.values(ROOMS[id].exits).some((e) => e && this.visited.has(e));
+    // corridors between rooms
+    g.fillStyle(PAL.grey, 1);
+    for (const r of rooms) {
+      if (!this.visited.has(r.id)) continue;
+      const a = cell(r);
+      for (const [dir, id] of Object.entries(r.exits)) {
+        if (!id || !ROOMS[id]) continue;
+        const b = cell(ROOMS[id]);
+        if (dir === 'left' || dir === 'right') g.fillRect(Math.min(a.x, b.x) + cw / 2, a.y + ch / 2 - 1, Math.abs(a.x - b.x), 2);
+        else g.fillRect(a.x + cw / 2 - 1, Math.min(a.y, b.y) + ch / 2, 2, Math.abs(a.y - b.y));
+      }
+    }
+    for (const r of rooms) {
+      if (!known(r.id)) continue;
+      const { x, y } = cell(r);
+      const seen = this.visited.has(r.id);
+      g.fillStyle(seen ? r.theme.bg : PAL.slate, 1);
+      g.fillRect(x + 2, y + 2, cw - 4, ch - 4);
+      const here = r.id === this.room.id;
+      g.lineStyle(1, here && Math.floor(this.frame / 15) % 2 ? PAL.yellow : seen ? PAL.lgrey : PAL.grey, 1);
+      g.strokeRect(x + 2.5, y + 2.5, cw - 5, ch - 5);
+      if (!seen) {
+        drawTextCentered(g, '?', x + cw / 2, y + ch / 2 - 3, PAL.grey);
+        continue;
+      }
+      if (here) {
+        // the friend you're playing, standing in the room
+        g.fillStyle(PAL.yellow, 1);
+        g.fillRect(x + cw / 2 - 1, y + 5, 3, 3);
+        g.fillRect(x + cw / 2 - 2, y + 8, 5, 4);
+      }
+      // items left (yellow dots) and friends not yet met (green dots)
+      const left = this.remainingIn(r.id);
+      for (let i = 0; i < Math.min(left, 5); i++) {
+        g.fillStyle(PAL.yellow, 1);
+        g.fillRect(x + 5 + i * 4, y + ch - 9, 2, 2);
+      }
+      const unmet = r.npcs.filter((n) => n.id !== this.hero.id && !this.talked.has(n.id)).length;
+      for (let i = 0; i < unmet; i++) {
+        g.fillStyle(PAL.lime, 1);
+        g.fillRect(x + cw - 8 - i * 4, y + ch - 9, 2, 2);
+      }
+      if (r.map.join('').includes('O')) {
+        g.fillStyle(this.hasLighter ? PAL.orange : PAL.red, 1);
+        g.fillRect(x + cw / 2 - 1, y + ch / 2, 3, 3);
+      }
+    }
+    const friends = CHARACTERS.length - 1;
+    drawText(g, `* ITEMS ${this.collected.size}/${TOTAL_ITEMS}`, 4, RH - 18, PAL.yellow);
+    drawText(g, `* FRIENDS MET ${[...this.talked].filter((t) => t !== this.hero.id).length}/${friends}`, 100, RH - 18, PAL.lime);
+    drawText(g, this.hasLighter ? 'LIGHTER: FOUND!' : 'LIGHTER: MISSING', 4, RH - 9, this.hasLighter ? PAL.orange : PAL.red);
+    if (Math.floor(this.frame / 30) % 2) drawText(g, 'M/JUMP TO CLOSE', RW - 92, RH - 9, PAL.lgrey);
   }
 
   private say(text: string, t = 150) {
@@ -1159,7 +1492,7 @@ export class GameScene extends Phaser.Scene {
     }
     const seen = new Set([this.room.id]);
     const queue: { id: string; first: string }[] = [];
-    for (const [dir, id] of Object.entries(this.room.exits)) if (id) queue.push({ id, first: dir });
+    for (const [dir, id] of Object.entries(this.room.exits)) if (id && ROOMS[id]) queue.push({ id, first: dir });
     while (queue.length) {
       const q = queue.shift()!;
       if (seen.has(q.id)) continue;
@@ -1176,7 +1509,7 @@ export class GameScene extends Phaser.Scene {
         this.hint = { x, y, label: ROOMS[q.id].name.replace(/\s*\(.*\)/, '') };
         return true;
       }
-      for (const id of Object.values(ROOMS[q.id].exits)) if (id && !seen.has(id)) queue.push({ id, first: q.first });
+      for (const id of Object.values(ROOMS[q.id].exits)) if (id && ROOMS[id] && !seen.has(id)) queue.push({ id, first: q.first });
     }
     return false;
   }
@@ -1303,7 +1636,7 @@ export class GameScene extends Phaser.Scene {
     if (this.collected.size >= TOTAL_ITEMS - 3 && this.collected.size > 0) {
       said = [`Only ${TOTAL_ITEMS - this.collected.size} to go! You're nearly there.`];
     }
-    if (n.def.partner === this.hero.id) said[0] = `There you are, ${this.hero.name}! ` + said[0];
+    if (n.def.partner === this.hero.id && !n.custom) said[0] = `There you are, ${this.hero.name}! ` + said[0];
     const me = this.hero;
     const lines: Line[] = [];
     // your own quirks come out in conversation too
@@ -1319,6 +1652,10 @@ export class GameScene extends Phaser.Scene {
     for (const text of said) lines.push({ who: n.def, text });
     this.talk = { npc: n, lines, idx: 0, shown: 0 };
     this.state = 'talk';
+    if (!this.talked.has(n.def.id)) {
+      this.talked.add(n.def.id);
+      this.save();
+    }
     n.sprite.setFlipX(this.px + PW / 2 < n.x);
     this.showPortrait(lines[0].who);
     input.clearLatches();
@@ -1353,6 +1690,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private endGame(text: string[], state: 'won' | 'over' = 'over') {
+    clearSave();
     this.state = state;
     this.overText = text;
     if (state === 'won') playMusic('victory');
@@ -1662,7 +2000,7 @@ export class GameScene extends Phaser.Scene {
   private drawHud() {
     const time = this.timeString();
     const meter = this.abilityMeter();
-    const key = `${this.room.id}|${this.collected.size}|${time}|${this.lives}|${Math.floor(meter * 12)}`;
+    const key = `${this.room.id}|${this.collected.size}|${time}|${this.lives}|${Math.floor(meter * 12)}|${this.hasLighter}`;
     if (key === this.hudKey) return;
     this.hudKey = key;
     const g = this.hud;
@@ -1681,6 +2019,13 @@ export class GameScene extends Phaser.Scene {
     g.fillStyle(meter >= 1 ? PAL.lime : PAL.grey, 1);
     g.fillRect(74, RH + 10, Math.round(24 * meter), 5);
     if (this.abId === 'tacos') drawText(g, this.shield ? '*' : ' ', 100, RH + 9, PAL.orange);
+    if (this.hasLighter) {
+      // a little lighter icon: you're ready for the fire pit
+      g.fillStyle(PAL.red, 1);
+      g.fillRect(108, RH + 11, 4, 4);
+      g.fillStyle(PAL.yellow, 1);
+      g.fillRect(109, RH + 9, 2, 2);
+    }
     if (this.mode === 'classic') {
       drawText(g, '@'.repeat(Math.max(0, this.lives)), RW - 2 - this.lives * 6, RH + 9, PAL.red);
     } else {
@@ -1707,6 +2052,10 @@ export class GameScene extends Phaser.Scene {
         g.fillRect(RW - 14, 52, 5, 2);
         g.fillRect(RW - 13, 54, 3, 1);
       }
+    } else if (this.state === 'map') {
+      this.drawMap(g);
+    } else if (this.state === 'finale' && this.finale) {
+      this.drawFinale(g);
     } else if (this.state === 'won' || this.state === 'over') {
       g.fillStyle(PAL.ink, 0.88);
       g.fillRect(20, 40, RW - 40, 20 + this.overText.length * 10);

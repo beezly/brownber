@@ -84,7 +84,7 @@ for (const [key, room] of Object.entries(ROOMS)) {
     left: openRows(0),
     right: openRows(31),
     up: openCols(0),
-    down: openCols(21),
+    down: openCols(21).filter((c) => m[21]?.[c] !== 'W'), // water in the floor is a hazard, not an exit
   };
   for (const dir of ['left', 'right', 'up', 'down'] as const) {
     const target = room.exits[dir];

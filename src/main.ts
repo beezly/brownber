@@ -26,7 +26,7 @@ muteBtn.addEventListener('click', (e) => {
   syncMute();
 });
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyM') {
+  if (e.code === 'KeyN') {
     setMuted(!isMuted());
     refreshMusic();
     syncMute();

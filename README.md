@@ -19,16 +19,22 @@ Open http://localhost:5173. The dev server also listens on your local network, s
 | Jump | Space / W / ↑ | JUMP (bottom right) |
 | Talk | E / Enter | TALK |
 | Ability | X / Shift | POWER |
-| Sound | M, or the ♫ button | ♫ button |
+| Map | M / Tab | MAP (top left) |
+| Sound | N, or the ♫ button | ♫ button |
 
 ## What's in the prototype
 
 - Title screen with **Cosy** (no deaths) or **Classic** (5 lives, midnight deadline) mode.
 - Character select with all 13 friends, each with a pixel portrait made from their photo and an ability based on their real-life quirk (see `src/abilities.ts`).
-- 4 rooms: the Porch, Sitting Room, Kitchen and Grand Staircase, with 12 party items to find.
+- 17 rooms across the ground floor, cellar, upstairs, attic, grounds and the Howgill Fells, with 51 party items. The rooms are split into `src/rooms.ts` and `src/rooms/{ground,upstairs,outside}.ts`.
 - Binks the Vizsla (bouncy, knocks you flying, never hurts), a robot hoover, a flying marmalade jar, coffee-machine steam, the woodburner, crumbling floorboards, a conveyor, bouncy wellies and walk-up stairs.
 - NPC dialogue with portraits. Your partner greets you differently.
 - Forgiving jump handling: coyote time and jump buffering, plus a checkpoint each time you land somewhere safe.
+- Progress saves automatically in the browser. The title screen offers to continue.
+- A map screen showing explored rooms, items left, friends not yet met, and whether you have the lighter.
+- The finale: light the fire pit with Maffa's lighter. Every friend you've talked to comes to the fire, and the ending depends on how many came and how much you found.
+
+Room data is checked with `npm run check:rooms`.
 
 ## Project layout
 

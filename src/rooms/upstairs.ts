@@ -1,4 +1,384 @@
+import { PAL } from '../palette';
 import type { RoomDef, SpriteDef } from '../rooms';
 
-export const ROOMS_UPSTAIRS: Record<string, RoomDef> = {};
-export const SPRITES_UPSTAIRS: Record<string, SpriteDef> = {};
+// UPSTAIRS: the Landing (hub), Tom & Luke's, the Family Bathroom, Nick & Karla's, and the Attic.
+//
+//   Attic              (4,0)
+//   Tom&Luke  Landing  Bathroom  Nick&Karla      (row 1)
+//                |
+//             Grand Staircase (4,2)
+//
+// Landing <-> Stairs: the staircase ceiling is open at cols 2-5; the landing floor is open at cols 1-6
+// with a one-way bridge over cols 2-5 (jump up through it; walk off its ends to drop back down).
+// Landing <-> Attic uses the same trick the other way round: a platform at row 4 (cols 12-19) under a
+// ceiling gap at cols 13-18; the attic floor is open at cols 13-18 with a bridge over cols 14-17.
+
+export const ROOMS_UPSTAIRS: Record<string, RoomDef> = {
+  landing: {
+    id: 'landing',
+    name: 'The Landing (Five More Minutes)',
+    theme: {
+      bg: 0x4a2c3d, motif: 0x62384e, motifKind: 'stripes', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
+      board: PAL.brown, furniture: PAL.red, bar: PAL.orange, barText: PAL.ink,
+    },
+    exits: { left: 'tomluke', right: 'bathroom', up: 'attic', down: 'stairs' },
+    pos: { x: 4, y: 1 },
+    signs: [
+      { x: 9, y: 146, text: 'STAIRS' },
+      { x: 148, y: 16, text: 'ATTIC ^' },
+    ],
+    map: [
+      '#############......#############',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#...........========...........#',
+      '#.......................*......#',
+      '#.....................======...#',
+      '#..............................#',
+      '#..............................#',
+      '#..............======..........#',
+      '#..............................#',
+      '#..........*...................#',
+      '#........======................#',
+      '#..............................#',
+      '#......*.......................#',
+      '#....=====.......======........#',
+      '................................',
+      '...........................N....',
+      '..........=====..........=====..',
+      '................................',
+      '..====..........................',
+      '#......#########################',
+    ],
+    guardians: [{ kind: 'walker', sprite: 'up_suitcase', x1: 88, x2: 216, y: 158, speed: 0.6 }],
+    npcs: [
+      {
+        id: 'beth',
+        lines: [
+          'I was ready at 11:45! Ish. Give me five more minutes!',
+          "Where are my keys? Shoes? Other shoes? ...Five more minutes!",
+          "That suitcase has a mind of its own. It's been out for a lap already.",
+        ],
+        byHero: {
+          curtis: [
+            "Curtis! I'm READY. Nearly. Five more minutes!",
+            "You've been downstairs with that keyboard for 45 minutes. Don't talk to me about late.",
+            "...Can you carry my suitcase? Mind it, it bites.",
+          ],
+        },
+      },
+    ],
+    items: ['coffee', 'cookie', 'tea'],
+  },
+
+  tomluke: {
+    id: 'tomluke',
+    name: "Tom & Luke's (Lie-Downs & Speeches)",
+    theme: {
+      bg: PAL.navy, motif: 0x34458a, motifKind: 'stripes', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
+      board: PAL.brown, furniture: 0x8fb4d6, bar: 0x8fb4d6, barText: PAL.ink,
+    },
+    exits: { right: 'landing' },
+    pos: { x: 3, y: 1 },
+    signs: [
+      { x: 60, y: 22, text: 'SPEECH TONIGHT 8PM' },
+      { x: 156, y: 126, text: 'LIE-DOWN ZONE' },
+    ],
+    map: [
+      '################################',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#................*.............#',
+      '#.............=======..........#',
+      '#..............................#',
+      '#.......*......................#',
+      '#....=======...................#',
+      '#..............................#',
+      '#..............................#',
+      '#............=======...........#',
+      '#...............................',
+      '#.......................*.......',
+      '#..--------..........--------...',
+      '#...............................',
+      '#...............................',
+      '################################',
+    ],
+    guardians: [
+      { kind: 'binks', x1: 16, x2: 232, y: 168 },
+      { kind: 'flyer', sprite: 'up_zzz', x1: 8, x2: 90, y: 98, amp: 6, speed: 0.4, harmless: true },
+    ],
+    npcs: [],
+    items: ['cheese', 'coffee', 'blanket'],
+  },
+
+  bathroom: {
+    id: 'bathroom',
+    name: 'The Family Bathroom (Roll-Top Hop)',
+    theme: {
+      bg: 0x2f8f9d, motif: 0x57b3bf, motifKind: 'tiles', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.white,
+      board: PAL.brown, furniture: PAL.white, bar: PAL.lime, barText: PAL.ink,
+    },
+    exits: { left: 'landing', right: 'nickkarla' },
+    pos: { x: 5, y: 1 },
+    signs: [
+      { x: 98, y: 126, text: 'BATH TIME' },
+    ],
+    map: [
+      '################################',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#...........................*..#',
+      '#...................=========..#',
+      '#..............................#',
+      '#.................*............#',
+      '#...........=======............#',
+      '#..............................#',
+      '#..............................#',
+      '...=======......................',
+      '................................',
+      '...............*................',
+      '...........XXXXXXXXXX...........',
+      '.....~.....XXXXXXXXXX.....~.....',
+      '################################',
+    ],
+    guardians: [
+      { kind: 'floater', sprite: 'up_bubble', x: 124, y1: 44, y2: 100, speed: 0.6 },
+      { kind: 'floater', sprite: 'up_bubble', x: 204, y1: 18, y2: 72, speed: 0.6 },
+    ],
+    npcs: [],
+    items: ['thermos', 'cake', 'prosecco'],
+  },
+
+  nickkarla: {
+    id: 'nickkarla',
+    name: "Nick & Karla's (Taco Tuesday)",
+    theme: {
+      bg: 0x8a3f2c, motif: 0xa5533a, motifKind: 'dots', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
+      board: PAL.brown, furniture: 0x2f9e6a, bar: PAL.yellow, barText: PAL.ink,
+    },
+    exits: { left: 'bathroom' },
+    pos: { x: 6, y: 1 },
+    signs: [
+      { x: 150, y: 150, text: 'THUMBS UP!' },
+      { x: 150, y: 24, text: 'NO UMBRELLAS' },
+    ],
+    map: [
+      '################################',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#.................*............#',
+      '#..............========........#',
+      '#..............................#',
+      '#.......*......................#',
+      '#....=======...................#',
+      '#..............................#',
+      '#..............................#',
+      '#............=======...........#',
+      '...............................#',
+      '.......*.......................#',
+      '.....------...........--------.#',
+      '...............................#',
+      '...............................#',
+      '################################',
+    ],
+    guardians: [
+      { kind: 'walker', sprite: 'up_chilli', x1: 48, x2: 216, y: 158, speed: 0.7 },
+      { kind: 'flyer', sprite: 'up_cloud', x1: 8, x2: 118, y: 44, amp: 10, speed: 0.6 },
+    ],
+    npcs: [],
+    items: ['thumb', 'cheese', 'taco'],
+  },
+
+  attic: {
+    id: 'attic',
+    name: 'The Attic (Best Views In Cumbria)',
+    theme: {
+      bg: 0x1d2b53, motif: 0x3b5dc9, motifKind: 'sky', wall: PAL.grey, wallDark: PAL.slate, wallLight: PAL.lgrey,
+      board: PAL.slate, furniture: PAL.brown, bar: PAL.lgrey, barText: PAL.ink,
+    },
+    exits: { down: 'landing' },
+    pos: { x: 4, y: 0 },
+    signs: [
+      { x: 66, y: 8, text: 'MIND THE SEAGULLS' },
+      { x: 96, y: 150, text: 'DOWN' },
+    ],
+    map: [
+      '################################',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#..............................#',
+      '#.................*............#',
+      '#......=====...=====...........#',
+      '#...........................*..#',
+      '#.........................=====#',
+      '#=====.........................#',
+      '#..............................#',
+      '#.......*..........=====.......#',
+      '#.....=====....................#',
+      '#..............................#',
+      '#.........................=====#',
+      '#####..........................#',
+      '#####..........................#',
+      '#####.=====.........=====......#',
+      '#####..........................#',
+      '#####.........====.............#',
+      '#############......#############',
+    ],
+    guardians: [{ kind: 'flyer', sprite: 'up_gull', x1: 16, x2: 240, y: 26, amp: 8, speed: 0.7 }],
+    npcs: [],
+    items: ['laser', 'keyboard', 'tea'],
+  },
+};
+
+export const SPRITES_UPSTAIRS: Record<string, SpriteDef> = {
+  // ---- guardians
+  up_suitcase: {
+    rows: [
+      '....kkkk....',
+      '....k..k....',
+      '.kkkkkkkkkk.',
+      '.krrrrrrrrk.',
+      '.krrwrrwrrk.',
+      '.kyyyyyyyyk.',
+      '.krrrrrrrrk.',
+      '.krrrrrrrrk.',
+      '.kkkkkkkkkk.',
+      '.kk......kk.',
+    ],
+    pal: { k: PAL.ink, r: PAL.red, y: PAL.yellow, w: PAL.white },
+  },
+  up_zzz: {
+    rows: [
+      'wwwww.....',
+      '...w..www.',
+      '..w.....w.',
+      '.wwww..w..',
+      '.....www..',
+      '..........',
+    ],
+    pal: { w: 0xcfe4f5 },
+  },
+  up_bubble: {
+    rows: [
+      '..oooo..',
+      '.ohhffo.',
+      'ohffffwo',
+      'offfffwo',
+      'offffffo',
+      'offfffbo',
+      '.offffo.',
+      '..oooo..',
+    ],
+    pal: { o: PAL.lgrey, f: 0xcfe8f5, h: PAL.white, w: PAL.white, b: 0x7fb8e0 },
+  },
+  up_chilli: {
+    rows: [
+      '....gg..',
+      '...gg...',
+      '.rrrrrr.',
+      'rwkrrwkr',
+      'rrrrrrrr',
+      'rrkkkkrr',
+      '.rrrrrr.',
+      '..rrrr..',
+      '...rr...',
+      '....r...',
+    ],
+    pal: { g: PAL.green, r: PAL.red, w: PAL.white, k: PAL.ink },
+  },
+  up_cloud: {
+    rows: [
+      '.....lllll......',
+      '...lllllllll.ll.',
+      '..lllllllllllll.',
+      '.lllllllllllllll',
+      '.dddddddddddddd.',
+      '..dddddddddddd..',
+      '..b...b...b.b...',
+      '....b...b...b...',
+    ],
+    pal: { l: PAL.lgrey, d: PAL.grey, b: PAL.blue },
+  },
+  up_gull: {
+    rows: [
+      'gg........gg',
+      '.wwww..wwww.',
+      '..wwwwwwww..',
+      '....wwwwy...',
+      '.....ww.....',
+    ],
+    pal: { g: PAL.grey, w: PAL.white, y: PAL.orange },
+  },
+  // ---- items (8x8)
+  item_taco: {
+    rows: [
+      '..kkkk..',
+      '.kgrgrk.',
+      'kgrgggrk',
+      'kyyyyyyk',
+      'kyyyyyyk',
+      '.kyyyyk.',
+      '..kkkk..',
+      '........',
+    ],
+    pal: { k: 0x5a2e14, g: PAL.green, r: PAL.red, y: PAL.yellow },
+  },
+  item_thumb: {
+    rows: [
+      '...kk...',
+      '..kppk..',
+      '..kppk..',
+      '.kkppkkk',
+      'kppppppk',
+      'kppppppk',
+      'kppppppk',
+      '.kkkkkk.',
+    ],
+    pal: { k: PAL.ink, p: PAL.peach },
+  },
+  item_keyboard: {
+    rows: [
+      '........',
+      'kkkkkkkk',
+      'kwkwwkwk',
+      'kkkkkkkk',
+      'kwwwwwwk',
+      'kkkkkkkk',
+      '.k....k.',
+      '........',
+    ],
+    pal: { k: PAL.ink, w: PAL.white },
+  },
+  item_laser: {
+    rows: [
+      '........',
+      '.kkkkkk.',
+      'kbbbbbbk',
+      'kbwbbbkr',
+      'kbbbbbbk',
+      '.kkkkkk.',
+      '........',
+      '........',
+    ],
+    pal: { k: PAL.ink, b: PAL.blue, w: PAL.white, r: PAL.red },
+  },
+};

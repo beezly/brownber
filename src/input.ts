@@ -13,6 +13,7 @@ class Input {
   private jumpLatch = false;
   private talkLatch = false;
   private abilityLatch = false;
+  private mapLatch = false;
   private leftLatch = false;
   private rightLatch = false;
   onFirstInteraction: (() => void) | null = null;
@@ -32,6 +33,15 @@ class Input {
     this.abilityLatch = false;
     return v;
   }
+  takeMap() {
+    const v = this.mapLatch;
+    this.mapLatch = false;
+    return v;
+  }
+  pressMap() {
+    this.mapLatch = true;
+    this.interacted();
+  }
   takeLeft() {
     const v = this.leftLatch;
     this.leftLatch = false;
@@ -43,7 +53,7 @@ class Input {
     return v;
   }
   clearLatches() {
-    this.jumpLatch = this.talkLatch = this.leftLatch = this.rightLatch = this.abilityLatch = false;
+    this.jumpLatch = this.talkLatch = this.leftLatch = this.rightLatch = this.abilityLatch = this.mapLatch = false;
   }
 
   private sync() {
@@ -89,6 +99,9 @@ class Input {
         if (!e.repeat) this.pressJump();
       } else if (k === 'KeyE' || k === 'Enter') {
         if (!e.repeat) this.pressTalk();
+      } else if (k === 'KeyM' || k === 'Tab') {
+        e.preventDefault();
+        if (!e.repeat) this.pressMap();
       } else if (k === 'KeyX' || k === 'ShiftLeft' || k === 'ShiftRight' || k === 'KeyQ') {
         if (!e.repeat) this.pressAbility();
       }
@@ -182,6 +195,13 @@ class Input {
     const talkUp = () => talk.classList.remove('on');
     talk.addEventListener('pointerup', talkUp);
     talk.addEventListener('pointercancel', talkUp);
+
+    const mapBtn = document.getElementById('btn-map')!;
+    mapBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.pressMap();
+    });
 
     const power = document.getElementById('btn-power')!;
     power.addEventListener('pointerdown', (e) => {

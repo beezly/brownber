@@ -3,7 +3,10 @@ import { PAL } from './palette';
 import { CHARACTERS, charById } from './characters';
 import { ABILITIES } from './abilities';
 import { bakeAll } from './sprites';
-import { drawText, drawTextCentered, wrap } from './font';
+import { drawText, drawTextCentered, drawTextRows, wrap } from './font';
+import { is16, setStyle } from './settings';
+import { rebakeAll } from './sprites';
+import { lighten, mix } from './colour';
 import { input } from './input';
 import { sfx } from './sound';
 import { playMusic } from './music';
@@ -29,6 +32,8 @@ export class BootScene extends Phaser.Scene {
 }
 
 // ---------------------------------------------------------------- title
+let pendingRebake = false;
+
 export class TitleScene extends Phaser.Scene {
   private g!: Phaser.GameObjects.Graphics;
   private binks!: Phaser.GameObjects.Image;
@@ -46,6 +51,10 @@ export class TitleScene extends Phaser.Scene {
     } catch {
       /* ignore */
     }
+    if (pendingRebake) {
+      pendingRebake = false;
+      rebakeAll(this);
+    }
     this.cameras.main.setBackgroundColor(PAL.ink);
     playMusic('title');
     this.g = this.add.graphics();
@@ -53,13 +62,20 @@ export class TitleScene extends Phaser.Scene {
     input.clearLatches();
     this.save = loadSave();
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
-      if (this.save && p.y < 120) return this.cont();
-      if (p.y > 120 && p.y < 140) {
-        this.toggleMode();
-      } else {
-        this.go();
-      }
+      if (this.save && p.y < 112) return this.cont();
+      if (p.y >= 134 && p.y < 154) return this.toggleStyle();
+      if (p.y >= 156 && p.y < 172) return this.toggleMode();
+      this.go();
     });
+  }
+
+  /** Switch between the 8-bit original and the 16-bit upgrade. */
+  private toggleStyle() {
+    setStyle(is16() ? '8bit' : '16bit');
+    sfx.select();
+    // re-bake after the restart, once nothing on screen is using the old textures
+    pendingRebake = true;
+    this.scene.restart();
   }
 
   private toggleMode() {
@@ -84,9 +100,112 @@ export class TitleScene extends Phaser.Scene {
     this.scene.start('select', { mode: this.mode });
   }
 
+  /** The 16-bit title backdrop: banded dusk sky, layered fells, a shaded Hall with smoking chimneys. */
+  private drawScene16(g: Phaser.GameObjects.Graphics) {
+    const stops: [number, number][] = [
+      [0, 0x0a0e2a],
+      [60, 0x2a2458],
+      [100, 0x7a3c74],
+      [124, 0xe0705e],
+      [150, 0xf8b870],
+    ];
+    for (let y = 0; y < 150; y += 2) {
+      let c = stops[stops.length - 1][1];
+      for (let i = 0; i < stops.length - 1; i++) {
+        const [a, ca] = stops[i];
+        const [b, cb] = stops[i + 1];
+        if (y <= b) {
+          c = mix(ca, cb, (y - a) / (b - a));
+          break;
+        }
+      }
+      g.fillStyle(c, 1);
+      g.fillRect(0, y, W, 2);
+    }
+    for (let i = 0; i < 50; i++) {
+      const x = (i * 97) % W;
+      const y = (i * 53) % 80;
+      const tw = (this.t + i * 13) % 90 < 8;
+      g.fillStyle(tw ? PAL.white : 0xa8b4e0, tw ? 1 : 0.7);
+      g.fillRect(x, y, 1, 1);
+      if (tw && i % 3 === 0) {
+        g.fillRect(x - 1, y, 3, 1);
+        g.fillRect(x, y - 1, 1, 3);
+      }
+    }
+    // far fells drift slowly (parallax), near fells a bit faster
+    const far = (this.t * 0.05) % W;
+    g.fillStyle(0x5a4a7a, 1);
+    for (let x = 0; x < W; x++) {
+      const h = 40 + Math.sin((x + far) / 37) * 11 + Math.sin((x + far) / 15) * 3;
+      g.fillRect(x, 150 - h, 1, h);
+    }
+    const near = (this.t * 0.12) % W;
+    g.fillStyle(0x2c2a4c, 1);
+    for (let x = 0; x < W; x++) {
+      const h = 20 + Math.sin((x + near) / 28) * 8 + Math.sin((x + near) / 10) * 2;
+      g.fillRect(x, 150 - h, 1, h);
+    }
+    // the Hall, shaded, with a slate roof and chimneys
+    const hx = 80;
+    g.fillStyle(0x3a3e6a, 1);
+    g.fillRect(hx, 110, 96, 40);
+    g.fillStyle(0x4a5080, 1);
+    g.fillRect(hx, 110, 96, 2);
+    g.fillRect(hx, 110, 2, 40);
+    g.fillStyle(0x24264a, 1);
+    g.fillRect(hx + 94, 110, 2, 40);
+    g.fillStyle(0x22243e, 1);
+    for (let i = 0; i < 6; i++) g.fillRect(hx - 4 + i * 2, 104 + i, 104 - i * 4, 1);
+    g.fillRect(hx + 2, 104, 100, 6);
+    for (const cxp of [hx + 12, hx + 78]) {
+      g.fillStyle(0x4a3a50, 1);
+      g.fillRect(cxp, 94, 8, 12);
+      g.fillStyle(0x5e4a64, 1);
+      g.fillRect(cxp, 94, 8, 2);
+      // chimney smoke
+      for (let k = 0; k < 4; k++) {
+        const p = (this.t * 0.4 + k * 12) % 48;
+        g.fillStyle(0xc0b0d0, 0.35 * (1 - p / 48));
+        g.fillCircle(cxp + 4 + Math.sin((this.t + k * 20) / 20) * 3 + p * 0.2, 92 - p, 2 + p / 12);
+      }
+    }
+    for (let i = 0; i < 6; i++) {
+      for (let j = 0; j < 2; j++) {
+        const lit = (i * 3 + j * 5 + Math.floor(this.t / 80)) % 7 !== 0;
+        const wx = hx + 8 + i * 14;
+        const wy = 116 + j * 15;
+        if (lit) {
+          g.fillStyle(0xffd070, 0.25);
+          g.fillRect(wx - 2, wy - 2, 9, 11);
+        }
+        g.fillStyle(lit ? 0xffe090 : 0x1c1e38, 1);
+        g.fillRect(wx, wy, 5, 7);
+        g.fillStyle(lit ? 0xf0a040 : 0x14162a, 1);
+        g.fillRect(wx, wy + 4, 5, 3);
+        g.fillStyle(0x24264a, 1);
+        g.fillRect(wx + 2, wy, 1, 7);
+      }
+    }
+    g.fillStyle(0x24264a, 1);
+    g.fillRect(hx + 42, 130, 12, 20);
+    g.fillStyle(0xffd070, 1);
+    g.fillRect(hx + 44, 132, 8, 18);
+    // lawn with a lighter rim and grass tufts
+    for (let y = 150; y < 192; y += 2) {
+      g.fillStyle(mix(0x3aa858, 0x1a5a34, (y - 150) / 42), 1);
+      g.fillRect(0, y, W, 2);
+    }
+    g.fillStyle(lighten(0x3aa858, 0.3), 1);
+    g.fillRect(0, 150, W, 1);
+    g.fillStyle(0x7ad070, 1);
+    for (let x = 0; x < W; x += 5) g.fillRect(x + ((x / 5) % 2) * 2, 149, 1, 2);
+  }
+
   update() {
     this.t++;
     if (input.takeLeft() || input.takeRight()) this.toggleMode();
+    if (input.takeAbility()) return this.toggleStyle();
     if (this.save) {
       if (input.takeJump()) return this.cont();
       if (input.takeTalk()) return this.go();
@@ -94,6 +213,8 @@ export class TitleScene extends Phaser.Scene {
 
     const g = this.g;
     g.clear();
+    if (is16()) this.drawScene16(g);
+    else {
     // stars over the fells
     for (let i = 0; i < 40; i++) {
       const x = (i * 97) % W;
@@ -125,11 +246,25 @@ export class TitleScene extends Phaser.Scene {
     g.fillRect(0, 150, W, 42);
     g.fillStyle(0x2c8a4a, 1);
     for (let x = 0; x < W; x += 6) g.fillRect(x + ((x / 6) % 2) * 3, 152, 1, 1);
+    }
 
-    drawTextCentered(g, 'BROWNBER', W / 2, 18, PAL.yellow, PAL.red, 3);
-    drawTextCentered(g, 'BUDDIES', W / 2, 46, PAL.white, PAL.blue, 3);
+    if (is16()) {
+      // chrome-and-sunset lettering
+      drawTextRows(g, 'BROWNBER', W / 2, 16, [0xfff4c0, 0xffe080, 0xffc040, 0xf89830, 0xe86828, 0xc84020, 0x902818], 3, 0x200c30);
+      drawTextRows(g, 'BUDDIES', W / 2, 44, [0xffffff, 0xd8ecff, 0xa8d0f8, 0x78a8f0, 0x4a80e0, 0x3058c0, 0x203890], 3, 0x200c30);
+    } else {
+      drawTextCentered(g, 'BROWNBER', W / 2, 18, PAL.yellow, PAL.red, 3);
+      drawTextCentered(g, 'BUDDIES', W / 2, 46, PAL.white, PAL.blue, 3);
+    }
     drawTextCentered(g, 'A WEEKEND AT THE HALL', W / 2, 76, PAL.lgrey);
     drawText(g, `V ${BUILD_ID.split('-')[0]}`, 2, 2, PAL.slate);
+
+    // style switch
+    g.fillStyle(PAL.ink, 0.75);
+    g.fillRect(W / 2 - 74, 137, 148, 13);
+    const sLabel = is16() ? 'POWER: 16-BIT MODE  ON' : 'POWER: 16-BIT MODE  OFF';
+    if (is16()) drawTextRows(g, sLabel, W / 2, 140, [0xfff4c0, 0xffe080, 0xffc040, 0xf89830, 0xe86828, 0xc84020, 0x902818]);
+    else drawTextCentered(g, sLabel, W / 2, 140, PAL.lgrey);
 
     const m = this.mode === 'cosy' ? '< COSY: NO DEATHS >' : '< CLASSIC: 5 LIVES >';
     g.fillStyle(PAL.ink, 0.7);

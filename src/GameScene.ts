@@ -9,6 +9,8 @@ import { playMusic, stopMusic } from './music';
 import { ABILITIES, type AbilityDef, type AbilityId } from './abilities';
 import { loadSave, writeSave, clearSave, type SaveData } from './save';
 import { CHARACTERS } from './characters';
+import { is16 } from './settings';
+import { darken, lighten, mix } from './colour';
 
 // ---- world constants ----
 const T = 8;
@@ -239,6 +241,7 @@ export class GameScene extends Phaser.Scene {
     this.hud = this.add.graphics().setDepth(10);
     this.ui = this.add.graphics().setDepth(11);
     this.portrait = this.add.image(10, 8, '__DEFAULT').setOrigin(0).setDepth(12).setVisible(false);
+    if (is16()) this.addScanlines();
 
     // find the start position
     const start = ROOMS[START_ROOM];
@@ -385,10 +388,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawRoomTexture() {
-    const key = `room_${this.room.id}`;
+    const key = `room_${this.room.id}_${is16() ? 16 : 8}`;
     if (!this.textures.exists(key)) {
       const g = this.add.graphics();
       const th = this.room.theme;
+      if (is16()) this.drawBackground16(g);
+      else {
       g.fillStyle(th.bg, 1);
       g.fillRect(0, 0, RW, RH);
       // wallpaper motif
@@ -452,6 +457,7 @@ export class GameScene extends Phaser.Scene {
         g.fillStyle(th.bg, 1);
         g.fillRect(214, 18, 4, 4);
       }
+      }
       for (let r = 0; r < ROWS; r++) {
         for (let c = 0; c < COLS; c++) this.drawStaticTile(g, this.tiles[r][c], c, r);
       }
@@ -463,10 +469,274 @@ export class GameScene extends Phaser.Scene {
     this.roomImg.setTexture(key);
   }
 
+  private drawMotif(g: Phaser.GameObjects.Graphics, kind: RoomDef['theme']['motifKind'], colour: number, ox: number, oy: number, yMax: number) {
+    g.fillStyle(colour, 1);
+    for (let y = 0; y < yMax; y += 16) {
+      for (let x = 0; x < RW; x += 16) {
+          switch (kind) {
+          case 'dots':
+            g.fillRect(ox + x + 4, oy + y + 4, 2, 1);
+            g.fillRect(ox + x + 12, oy + y + 12, 2, 1);
+            break;
+          case 'leaf':
+            g.fillRect(ox + x + 6, oy + y + 3, 1, 1);
+            g.fillRect(ox + x + 5, oy + y + 4, 3, 1);
+            g.fillRect(ox + x + 4, oy + y + 5, 5, 1);
+            g.fillRect(ox + x + 5, oy + y + 6, 3, 1);
+            g.fillRect(ox + x + 6, oy + y + 7, 1, 2);
+            g.fillRect(ox + x + 13, oy + y + 12, 2, 2);
+            break;
+          case 'tiles':
+            g.fillRect(ox + x, oy + y, 16, 1);
+            g.fillRect(ox + x, oy + y + 8, 16, 1);
+            g.fillRect(ox + x, oy + y, 1, 16);
+            g.fillRect(ox + x + 8, oy + y, 1, 16);
+            break;
+          case 'fleur':
+            g.fillRect(ox + x + 7, oy + y + 3, 1, 5);
+            g.fillRect(ox + x + 5, oy + y + 5, 5, 1);
+            g.fillRect(ox + x + 6, oy + y + 9, 3, 1);
+            break;
+          case 'stripes':
+            g.fillRect(ox + x + 2, oy + y, 3, 16);
+            g.fillRect(ox + x + 10, oy + y, 1, 16);
+            break;
+          case 'stone':
+            g.fillRect(ox + x, oy + y + 7, 16, 1);
+            g.fillRect(ox + x, oy + y + 15, 16, 1);
+            g.fillRect(ox + x + ((y / 16) % 2 ? 4 : 11), oy + y, 1, 7);
+            g.fillRect(ox + x + ((y / 16) % 2 ? 11 : 4), oy + y + 8, 1, 7);
+            break;
+          case 'sky': {
+            // evening sky: stars high up
+            const n = (x * 7 + y * 13) % 29;
+            if (y < 100 && n === 0) g.fillRect(ox + x + (n % 7) + 3, oy + y + ((x + y) % 11), 1, 1);
+            break;
+          }
+          case 'plain':
+            break;
+        }
+      }
+    }
+  }
+
+  /** A faint CRT feel for 16-bit mode: scanlines and a soft vignette. */
+  private addScanlines() {
+    if (!this.textures.exists('scan16')) {
+      const g = this.add.graphics();
+      g.fillStyle(0x000000, 0.1);
+      for (let y = 1; y < 192; y += 2) g.fillRect(0, y, RW, 1);
+      for (let i = 0; i < 6; i++) {
+        g.fillStyle(0x000000, 0.06);
+        g.fillRect(0, 0, RW, 6 - i);
+        g.fillRect(0, 192 - (6 - i), RW, 6 - i);
+        g.fillRect(0, 0, 6 - i, 192);
+        g.fillRect(RW - (6 - i), 0, 6 - i, 192);
+      }
+      g.generateTexture('scan16', RW, 192);
+      g.destroy();
+    }
+    this.add.image(0, 0, 'scan16').setOrigin(0).setDepth(20);
+  }
+
+  /** 16-bit backdrop: smooth (9-bit banded) gradients, a wainscot rail indoors, a dusk sky outdoors. */
+  private drawBackground16(g: Phaser.GameObjects.Graphics) {
+    const th = this.room.theme;
+    const band = (y0: number, y1: number, col: (y: number) => number) => {
+      for (let y = y0; y < y1; y += 2) {
+        g.fillStyle(col(y), 1);
+        g.fillRect(0, y, RW, 2);
+      }
+    };
+    if (th.motifKind === 'sky') {
+      const stops: [number, number][] = [
+        [0, 0x0e1230],
+        [60, 0x2a2458],
+        [96, 0x6a3a72],
+        [118, 0xd06a64],
+        [134, 0xf0a868],
+      ];
+      band(0, RH, (y) => {
+        for (let i = 0; i < stops.length - 1; i++) {
+          const [a, ca] = stops[i];
+          const [b, cb] = stops[i + 1];
+          if (y <= b) return mix(ca, cb, (y - a) / (b - a));
+        }
+        return stops[stops.length - 1][1];
+      });
+      // stars, brighter ones with a twinkle cross
+      for (let i = 0; i < 46; i++) {
+        const x = (i * 97 + this.room.pos.x * 31) % RW;
+        const y = (i * 53) % 84;
+        g.fillStyle(i % 5 ? 0xb8c4e8 : PAL.white, i % 3 ? 0.7 : 1);
+        g.fillRect(x, y, 1, 1);
+        if (i % 9 === 0) {
+          g.fillRect(x - 1, y, 3, 1);
+          g.fillRect(x, y - 1, 1, 3);
+        }
+      }
+      // a crescent moon
+      g.fillStyle(0xfff0b0, 1);
+      g.fillCircle(214, 24, 7);
+      g.fillStyle(mix(0x0e1230, 0x2a2458, 24 / 60), 1);
+      g.fillCircle(218, 21, 6);
+      // two layers of fells for depth
+      const far = mix(th.wallDark, 0x7a6aa0, 0.45);
+      g.fillStyle(far, 1);
+      for (let x = 0; x < RW; x++) {
+        const h = 46 + Math.sin(x / 41 + this.room.pos.x * 1.7) * 12 + Math.sin(x / 17) * 3;
+        g.fillRect(x, 126 - h, 1, h + 60);
+      }
+      g.fillStyle(lighten(far, 0.18), 1);
+      for (let x = 0; x < RW; x++) {
+        const h = 46 + Math.sin(x / 41 + this.room.pos.x * 1.7) * 12 + Math.sin(x / 17) * 3;
+        g.fillRect(x, 126 - h, 1, 1);
+      }
+      g.fillStyle(th.wallDark, 1);
+      for (let x = 0; x < RW; x++) {
+        const h = 26 + Math.sin(x / 29 + this.room.pos.x) * 9 + Math.sin(x / 9) * 2;
+        g.fillRect(x, 140 - h, 1, h + 40);
+      }
+      return;
+    }
+    // indoors: wallpaper gradient above a wooden dado rail, panelling below
+    const rail = 118;
+    band(0, rail, (y) => mix(lighten(th.bg, 0.14), darken(th.bg, 0.18), y / rail));
+    if (th.motifKind !== 'plain') {
+      this.drawMotif(g, th.motifKind, lighten(th.motif, 0.22), -1, -1, rail);
+      this.drawMotif(g, th.motifKind, th.motif, 0, 0, rail);
+    }
+    const panel = darken(th.bg, 0.35);
+    band(rail, RH, (y) => mix(panel, darken(panel, 0.3), (y - rail) / (RH - rail)));
+    g.fillStyle(lighten(panel, 0.12), 1);
+    for (let x = 4; x < RW; x += 24) {
+      g.fillRect(x, rail + 8, 1, RH - rail - 12);
+      g.fillRect(x, rail + 8, 18, 1);
+    }
+    g.fillStyle(darken(panel, 0.35), 1);
+    for (let x = 4; x < RW; x += 24) {
+      g.fillRect(x + 18, rail + 8, 1, RH - rail - 12);
+      g.fillRect(x, RH - 5, 19, 1);
+    }
+    g.fillStyle(lighten(th.board, 0.35), 1);
+    g.fillRect(0, rail, RW, 1);
+    g.fillStyle(th.board, 1);
+    g.fillRect(0, rail + 1, RW, 2);
+    g.fillStyle(darken(th.board, 0.45), 1);
+    g.fillRect(0, rail + 3, RW, 1);
+  }
+
+  /** 16-bit tiles with bevels and texture. Returns false to fall back to the 8-bit tile. */
+  private drawTile16(g: Phaser.GameObjects.Graphics, ch: string, c: number, r: number): boolean {
+    const x = c * T;
+    const y = r * T;
+    const th = this.room.theme;
+    const hash = (a: number, b: number) => (((a * 73856093) ^ (b * 19349663)) >>> 0) % 1000 / 1000;
+    const px = (col: number, dx: number, dy: number, w = 1, h = 1) => {
+      g.fillStyle(col, 1);
+      g.fillRect(x + dx, y + dy, w, h);
+    };
+    switch (ch) {
+      case '#': {
+        const mortar = darken(th.wall, 0.5);
+        px(mortar, 0, 0, T, T);
+        for (let row = 0; row < 2; row++) {
+          const off = (r * 2 + row) % 2 ? 4 : 0;
+          for (let b = -1; b < 2; b++) {
+            const bx = b * 8 + off;
+            const v = hash(c * 3 + b, r * 2 + row) * 0.16 - 0.08;
+            const base = v > 0 ? lighten(th.wall, v) : darken(th.wall, -v);
+            const x0 = Math.max(0, bx);
+            const x1 = Math.min(T, bx + 7);
+            if (x1 <= x0) continue;
+            px(base, x0, row * 4, x1 - x0, 3);
+            px(lighten(base, 0.25), x0, row * 4, x1 - x0, 1);
+            px(darken(base, 0.2), x0, row * 4 + 2, x1 - x0, 1);
+          }
+        }
+        return true;
+      }
+      case '=': {
+        const b = th.board;
+        px(lighten(b, 0.4), 0, 0, T, 1);
+        px(lighten(b, 0.1), 0, 1, T, 1);
+        px(b, 0, 2, T, 1);
+        px(darken(b, 0.25), 0, 3, T, 1);
+        px(darken(b, 0.6), 0, 4, T, 1);
+        px(darken(b, 0.45), 7, 1, 1, 3);
+        px(darken(b, 0.15), Math.floor(hash(c, r) * 6), 2, 2, 1);
+        return true;
+      }
+      case '-': {
+        const f = th.furniture;
+        px(lighten(f, 0.35), 0, 0, T, 1);
+        px(lighten(f, 0.15), 0, 1, T, 2);
+        px(f, 0, 3, T, 2);
+        px(darken(f, 0.3), 0, 5, T, 1);
+        px(darken(f, 0.65), 0, 6, T, 1);
+        if (this.tile(c - 1, r) !== '-') px(darken(f, 0.65), 0, 6, 1, 2);
+        if (this.tile(c + 1, r) !== '-') px(darken(f, 0.65), 7, 6, 1, 2);
+        if (c % 2 === 0) px(darken(f, 0.2), 0, 1, 1, 4);
+        return true;
+      }
+      case 'G': {
+        const soil = 0x5a3a22;
+        px(soil, 0, 0, T, T);
+        px(darken(soil, 0.25), 0, 5, T, 3);
+        px(0x8a6a4a, Math.floor(hash(c, r) * 6), 4, 2, 1);
+        px(darken(soil, 0.45), Math.floor(hash(r, c) * 6) + 1, 6, 1, 1);
+        if (!'GD'.includes(this.tile(c, r - 1))) {
+          px(0x2e8a4a, 0, 0, T, 3);
+          px(0x56c062, 0, 0, T, 1);
+          px(0x1e6a3a, 0, 3, T, 1);
+          for (let i = 0; i < 3; i++) px(i % 2 ? 0x8ae070 : 0x56c062, (c * 3 + i * 3) % 8, -1 - (i % 2), 1, 1 + (i % 2));
+        }
+        return true;
+      }
+      case 'D': {
+        const v = hash(c, r) * 0.2 - 0.1;
+        const base = v > 0 ? lighten(PAL.grey, v) : darken(PAL.grey, -v);
+        px(base, 0, 0, T, T);
+        px(lighten(base, 0.3), 0, 0, T, 1);
+        px(lighten(base, 0.18), 0, 0, 1, T);
+        px(darken(base, 0.35), 0, 7, T, 1);
+        px(darken(base, 0.25), 7, 0, 1, T);
+        px(darken(base, 0.15), 2 + Math.floor(hash(r, c) * 4), 3, 2, 1);
+        return true;
+      }
+      case '^': {
+        for (let i = 0; i < 2; i++) {
+          const sx = i * 4;
+          px(0xd8e4f0, sx + 1, 3, 1, 5);
+          px(0x8a9cb0, sx + 2, 3, 1, 5);
+          px(0xd8e4f0, sx, 6, 2, 2);
+          px(0x5a6c80, sx + 2, 6, 2, 2);
+          px(PAL.white, sx + 1, 3, 1, 1);
+        }
+        return true;
+      }
+      case 'X': {
+        if (this.room.id === 'bathroom') return false;
+        const t = (r % 10) / 10;
+        px(mix(PAL.white, 0xc8d4e0, t), 0, 0, T, T);
+        if (this.tile(c - 1, r) !== 'X') px(PAL.white, 0, 0, 1, T);
+        if (this.tile(c + 1, r) !== 'X') px(0x8a9cb0, 7, 0, 1, T);
+        if (this.tile(c, r - 1) !== 'X') px(PAL.white, 0, 0, T, 1);
+        if (this.tile(c + 1, r) !== 'X' && (r % 4 === 1 || r % 4 === 2)) {
+          px(0xc8d4e0, 4, 0, 1, T);
+          px(0x5a6c80, 5, 0, 1, T);
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
   private drawStaticTile(g: Phaser.GameObjects.Graphics, ch: string, c: number, r: number) {
     const x = c * T;
     const y = r * T;
     const th = this.room.theme;
+    if (is16() && this.drawTile16(g, ch, c, r)) return;
     switch (ch) {
       case '#': {
         g.fillStyle(th.wall, 1);
@@ -1785,6 +2055,26 @@ export class GameScene extends Phaser.Scene {
   private drawDynamic() {
     const g = this.dyn;
     g.clear();
+    if (is16() && this.room.theme.motifKind === 'sky') {
+      // slow drifting clouds and twinkling stars
+      for (let i = 0; i < 3; i++) {
+        const w = 34 + i * 10;
+        const cx = ((i * 97 + this.frame * (0.05 + i * 0.03)) % (RW + w * 2)) - w;
+        const cy = 30 + i * 18;
+        g.fillStyle(0xb8a0d0, 0.18 + i * 0.04);
+        g.fillEllipse(cx, cy, w, 8);
+        g.fillEllipse(cx + w * 0.2, cy - 3, w * 0.55, 7);
+      }
+      for (let i = 0; i < 6; i++) {
+        if ((this.frame + i * 37) % 90 < 10) {
+          g.fillStyle(PAL.white, 1);
+          const x = (i * 131 + this.room.pos.x * 31) % RW;
+          const y = (i * 41) % 70 + 4;
+          g.fillRect(x - 1, y, 3, 1);
+          g.fillRect(x, y - 1, 1, 3);
+        }
+      }
+    }
     const th = this.room.theme;
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
@@ -2011,11 +2301,28 @@ export class GameScene extends Phaser.Scene {
     const g = this.hud;
     const th = this.room.theme;
     g.clear();
-    g.fillStyle(th.bar, 1);
-    g.fillRect(0, RH, RW, 8);
-    drawTextCentered(g, this.room.name, RW / 2, RH + 1, th.barText);
-    g.fillStyle(PAL.ink, 1);
-    g.fillRect(0, RH + 8, RW, 8);
+    if (is16()) {
+      // glossy 16-bit bar
+      g.fillStyle(lighten(th.bar, 0.35), 1);
+      g.fillRect(0, RH, RW, 1);
+      g.fillStyle(lighten(th.bar, 0.12), 1);
+      g.fillRect(0, RH + 1, RW, 3);
+      g.fillStyle(darken(th.bar, 0.12), 1);
+      g.fillRect(0, RH + 4, RW, 3);
+      g.fillStyle(darken(th.bar, 0.45), 1);
+      g.fillRect(0, RH + 7, RW, 1);
+      drawTextCentered(g, this.room.name, RW / 2, RH + 1, th.barText, th.barText === PAL.ink ? lighten(th.bar, 0.5) : darken(th.bar, 0.55));
+      g.fillStyle(0x10142c, 1);
+      g.fillRect(0, RH + 8, RW, 8);
+      g.fillStyle(0x2a3060, 1);
+      g.fillRect(0, RH + 8, RW, 1);
+    } else {
+      g.fillStyle(th.bar, 1);
+      g.fillRect(0, RH, RW, 8);
+      drawTextCentered(g, this.room.name, RW / 2, RH + 1, th.barText);
+      g.fillStyle(PAL.ink, 1);
+      g.fillRect(0, RH + 8, RW, 8);
+    }
     drawText(g, `ITEMS ${String(this.collected.size).padStart(2, '0')}/${TOTAL_ITEMS}`, 2, RH + 9, PAL.yellow);
     drawTextCentered(g, time, RW / 2 + 24, RH + 9, PAL.white);
     // ability meter: full and bright when ready

@@ -30,6 +30,7 @@ Open http://localhost:5173. The dev server also listens on your local network, s
 - Binks the Vizsla (bouncy, knocks you flying, never hurts), a robot hoover, a flying marmalade jar, coffee-machine steam, the woodburner, crumbling floorboards, a conveyor, bouncy wellies and walk-up stairs.
 - NPC dialogue with portraits. Your partner greets you differently.
 - Forgiving jump handling: coyote time and jump buffering, plus a checkpoint each time you land somewhere safe.
+- **16-bit mode** (POWER / X on the title screen): shaded sprites with coloured outlines, bevelled tiles, Victorian panelling, a dusk sky with parallax fells, clouds, scanlines, and FM-synth music and sound effects in the early-90s console style (`src/settings.ts`, `src/music.ts`, `src/sound.ts`). The choice is remembered.
 - Progress saves automatically in the browser. The title screen offers to continue.
 - A map screen showing explored rooms, items left, friends not yet met, and whether you have the lighter.
 - The finale: light the fire pit with Maffa's lighter. Every friend you've talked to comes to the fire, and the ending depends on how many came and how much you found.

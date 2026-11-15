@@ -2,24 +2,77 @@ import Phaser from './phaser';
 import { PAL } from './palette';
 import { BINKS_FRAMES, BINKS_PAL, CHARACTERS, FRAMES, buildFrame, charPalette } from './characters';
 import { EXTRA_SPRITES } from './rooms';
+import { is16 } from './settings';
+import { darken, lighten } from './colour';
 
 type Pal = Record<string, number>;
 
-/** Bake a pixel map (array of strings) into a texture. '.' is transparent. */
+const baked = new Set<string>();
+
+/** Bake a pixel map (array of strings) into a texture. '.' is transparent.
+ *  In 16-bit mode the sprite is shaded automatically (see shade16). */
 export function bake(scene: Phaser.Scene, key: string, rows: string[], pal: Pal) {
   if (scene.textures.exists(key)) return;
-  const g = scene.add.graphics();
   const w = Math.max(...rows.map((r) => r.length));
-  rows.forEach((row, y) => {
-    for (let x = 0; x < row.length; x++) {
-      const c = pal[row[x]];
-      if (c === undefined) continue;
+  const h = rows.length;
+  let grid: (number | null)[][] = rows.map((row) => Array.from({ length: w }, (_, x) => pal[row[x]] ?? null));
+  if (is16()) grid = shade16(grid, pal.k ?? PAL.ink);
+  const g = scene.add.graphics();
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = grid[y][x];
+      if (c === null) continue;
       g.fillStyle(c, 1);
       g.fillRect(x, y, 1, 1);
     }
-  });
-  g.generateTexture(key, w, rows.length);
+  }
+  g.generateTexture(key, w, h);
   g.destroy();
+  baked.add(key);
+}
+
+/**
+ * 16-bit look: light from the top-left. Interior pixels next to an edge above/left get a
+ * highlight, those next to an edge below/right get a shadow, and black outlines become a dark
+ * shade of the colour they wrap (as 16-bit sprite artists liked to do).
+ */
+function shade16(grid: (number | null)[][], outline: number): (number | null)[][] {
+  const h = grid.length;
+  const w = grid[0]?.length ?? 0;
+  const at = (x: number, y: number) => (y < 0 || y >= h || x < 0 || x >= w ? null : grid[y][x]);
+  const isEdge = (c: number | null) => c === null || c === outline || c === PAL.ink;
+  const out = grid.map((row) => row.slice());
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = grid[y][x];
+      if (c === null) continue;
+      if (c === outline || c === PAL.ink) {
+        // coloured outline: darken the most common neighbouring fill colour
+        const counts = new Map<number, number>();
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const n = at(x + dx, y + dy);
+          if (n !== null && !isEdge(n)) counts.set(n, (counts.get(n) ?? 0) + 1);
+        }
+        let best: number | null = null;
+        let bc = 0;
+        for (const [n, k] of counts) if (k > bc) [best, bc] = [n, k];
+        out[y][x] = best === null ? c : darken(best, 0.62);
+        continue;
+      }
+      const top = isEdge(at(x, y - 1)) || isEdge(at(x - 1, y));
+      const bottom = isEdge(at(x, y + 1)) || isEdge(at(x + 1, y));
+      if (top && !bottom) out[y][x] = lighten(c, 0.28);
+      else if (bottom && !top) out[y][x] = darken(c, 0.22);
+    }
+  }
+  return out;
+}
+
+/** Throw away every baked sprite and bake them again (after switching 8-bit/16-bit). */
+export function rebakeAll(scene: Phaser.Scene) {
+  for (const k of baked) if (scene.textures.exists(k)) scene.textures.remove(k);
+  baked.clear();
+  bakeAll(scene);
 }
 
 // 8x8 party items

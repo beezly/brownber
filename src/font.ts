@@ -126,3 +126,31 @@ export function wrap(text: string, max: number): string[] {
   if (cur) lines.push(cur);
   return lines;
 }
+
+/** Centered text where each of the 7 glyph rows has its own colour (for chrome/gradient titles). */
+export function drawTextRows(
+  g: Phaser.GameObjects.Graphics,
+  text: string,
+  cx: number,
+  y: number,
+  rowColors: number[],
+  scale = 1,
+  shadow?: number,
+) {
+  const str = text.toUpperCase();
+  const x0 = Math.round(cx - (textWidth(str) * scale) / 2);
+  const paint = (ox: number, oy: number, colorFor: (r: number) => number) => {
+    for (let i = 0; i < str.length; i++) {
+      const glyph = G[str[i]] ?? G['?'];
+      const gx = ox + i * CHAR_W * scale;
+      for (let r = 0; r < 7; r++) {
+        const bits = glyph[r];
+        if (!bits) continue;
+        g.fillStyle(colorFor(r), 1);
+        for (let c = 0; c < 5; c++) if (bits & (0x10 >> c)) g.fillRect(gx + c * scale, oy + r * scale, scale, scale);
+      }
+    }
+  };
+  if (shadow !== undefined) paint(x0 + scale, y + scale, () => shadow);
+  paint(x0, y, (r) => rowColors[Math.min(r, rowColors.length - 1)]);
+}
